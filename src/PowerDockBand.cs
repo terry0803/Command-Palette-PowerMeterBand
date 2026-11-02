@@ -8,8 +8,9 @@ namespace PowerMeterBand;
 /// </summary>
 internal sealed partial class PowerDockBand : WrappedDockItem, IDisposable
 {
-    // The LightningBolt glyph () fills the whole em box and looks larger than the
-    // other dock icons, so use an SVG with the same inset as the Fluent glyphs.
+    // The Dock gives every icon a fixed 16-DIP box. A bare bolt is too narrow for it and
+    // leaves uneven gaps, so the SVG frames the bolt in a rounded square like the
+    // Performance Monitor's CPU icon. The Fluent LightningBolt glyph looked too large.
     public static readonly IconInfo BoltIcon = new(
         IconHelpers.FromRelativePath("Assets\\bolt-light.svg").Light,
         IconHelpers.FromRelativePath("Assets\\bolt-dark.svg").Dark);
