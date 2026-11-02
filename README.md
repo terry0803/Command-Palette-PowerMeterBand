@@ -6,8 +6,9 @@
 
 ## 功能
 
-- **即時功率**：Dock 上每秒更新整機耗電（W）。滑鼠停在上面會顯示 CPU 功率和電池充放電功率。
-- **詳細資訊頁**：點一下會在命令選擇區打開詳細頁面，顯示整機功率、CPU 封裝功率、電池充放電、電量（Wh）和預估剩餘或充飽時間。
+- **即時功率**：用電池時，Dock 上每秒更新整機耗電（W）。滑鼠停在上面會顯示 CPU 功率和電池充放電功率。
+- **插電時可選顯示內容**：插電時量不到整機功率（見下方說明），可以在詳細資訊頁切換 Dock 要顯示**充電功率**（例如 `+42 W`）或 **CPU 功率**。設定會保留。
+- **詳細資訊頁**：點一下會在命令選擇區打開詳細頁面，顯示整機功率、CPU 封裝功率、GPU 功率、電池充放電、電量（Wh）和預估剩餘或充飽時間。
 - **跟內建項目一致**：圖示亮度、間距、等寬數字都跟內建的效能監視器（CPU、記憶體、電池）相同，數字跳動時寬度不變。
 - **佔用很少**：約 0.4% 的單一 CPU 核心、約 60 MB 記憶體。
 
@@ -19,7 +20,10 @@
 |---|---|
 | 整機功率 | Windows 效能計數器 `\Power Meter(Power Meter (0))\Power`（ACPI 電源計量器）。沒有這個計數器時，改用電池放電功率 |
 | CPU 封裝功率 | `\Energy Meter(RAPL_Package0_PKG)\Power`（Intel RAPL） |
+| GPU 功率 | `\Energy Meter(RAPL_Package0_PP1)\Power`（Intel RAPL 內顯電源平面） |
 | 電池 | `Windows.Devices.Power.Battery` |
+
+ACPI 電源計量器量的是「從電池流出的電」，**插電時讀數是 0**，筆電也沒有其他感測器能量整機用電，所以整機功率只在使用電池時有數值。
 
 不是每台電腦都有 Power Meter 計數器，可以先用 PowerShell 檢查：
 
@@ -63,6 +67,7 @@ src/
   PowerSampler.cs              讀取功率與電池資料
   PowerDockBand.cs             Dock 上的項目（每秒更新）
   PowerDetailsPage.cs          點擊後的詳細資訊頁（Adaptive Card）
+  PluggedInDisplay.cs          插電時顯示內容的設定與切換按鈕
   DockValueListItem.cs         固定標籤寬度、等寬數字
   PowerMeterCommandsProvider.cs / PowerMeterExtension.cs / Program.cs
                                Command Palette 擴充套件的進入點

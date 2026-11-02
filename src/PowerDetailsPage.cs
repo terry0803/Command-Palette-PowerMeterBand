@@ -50,8 +50,8 @@ internal sealed partial class PowerDetailsPage : ContentPage
                 {
                   "type": "Column",
                   "items": [
-                    { "type": "TextBlock", "text": "電池充放電", "size": "small", "isSubtle": true, "horizontalAlignment": "right" },
-                    { "type": "TextBlock", "text": "${batteryRate}", "size": "medium", "horizontalAlignment": "right" }
+                    { "type": "TextBlock", "text": "GPU 功率", "size": "small", "isSubtle": true, "horizontalAlignment": "right" },
+                    { "type": "TextBlock", "text": "${gpuPower}", "size": "medium", "horizontalAlignment": "right" }
                   ]
                 }
               ]
@@ -63,15 +63,35 @@ internal sealed partial class PowerDetailsPage : ContentPage
                 {
                   "type": "Column",
                   "items": [
-                    { "type": "TextBlock", "text": "電池電量", "size": "small", "isSubtle": true },
-                    { "type": "TextBlock", "text": "${batteryLevel}", "size": "medium", "wrap": true }
+                    { "type": "TextBlock", "text": "電池充放電", "size": "small", "isSubtle": true },
+                    { "type": "TextBlock", "text": "${batteryRate}", "size": "medium" }
                   ]
                 },
                 {
                   "type": "Column",
                   "items": [
-                    { "type": "TextBlock", "text": "${timeLabel}", "size": "small", "isSubtle": true, "horizontalAlignment": "right" },
-                    { "type": "TextBlock", "text": "${timeRemaining}", "size": "medium", "horizontalAlignment": "right" }
+                    { "type": "TextBlock", "text": "電池電量", "size": "small", "isSubtle": true, "horizontalAlignment": "right" },
+                    { "type": "TextBlock", "text": "${batteryLevel}", "size": "medium", "wrap": true, "horizontalAlignment": "right" }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "ColumnSet",
+              "spacing": "large",
+              "columns": [
+                {
+                  "type": "Column",
+                  "items": [
+                    { "type": "TextBlock", "text": "${timeLabel}", "size": "small", "isSubtle": true },
+                    { "type": "TextBlock", "text": "${timeRemaining}", "size": "medium" }
+                  ]
+                },
+                {
+                  "type": "Column",
+                  "items": [
+                    { "type": "TextBlock", "text": "插電時 Dock 顯示", "size": "small", "isSubtle": true, "horizontalAlignment": "right" },
+                    { "type": "TextBlock", "text": "${pluggedInDisplay}", "size": "medium", "horizontalAlignment": "right" }
                   ]
                 }
               ]
@@ -79,7 +99,7 @@ internal sealed partial class PowerDetailsPage : ContentPage
             {
               "type": "TextBlock",
               "spacing": "extraLarge",
-              "text": "整機功率來自 ACPI Power Meter，CPU 功率來自 Intel RAPL，每秒更新。",
+              "text": "整機功率來自 ACPI Power Meter，只在使用電池時有數值；CPU、GPU 功率來自 Intel RAPL。每秒更新。",
               "size": "small",
               "isSubtle": true,
               "wrap": true
@@ -98,9 +118,10 @@ internal sealed partial class PowerDetailsPage : ContentPage
         Icon = PowerDockBand.BoltIcon;
         Commands =
         [
+            new CommandContextItem(new TogglePluggedInDisplayCommand()),
             new CommandContextItem(new OpenUrlCommand("ms-settings:batterysaver-usagedetails") { Name = "開啟電池使用量設定" }),
         ];
-        Update(new PowerSnapshot(null, null, null, null, null, null));
+        Update(new PowerSnapshot(null, null, null, null, null, null, null, false));
     }
 
     public override IContent[] GetContent() => [_form];
@@ -109,8 +130,10 @@ internal sealed partial class PowerDetailsPage : ContentPage
     {
         var data = new JsonObject
         {
-            ["systemPower"] = FormatWatts(s.SystemWatts),
+            ["systemPower"] = s.SystemWatts is null && s.PluggedIn ? "插電時無法量測" : FormatWatts(s.SystemWatts),
             ["cpuPower"] = FormatWatts(s.CpuWatts),
+            ["gpuPower"] = FormatWatts(s.GpuWatts),
+            ["pluggedInDisplay"] = DisplaySettings.Describe(DisplaySettings.PluggedIn),
             ["status"] = s.BatteryStatus switch
             {
                 BatteryStatus.Charging => "充電中",

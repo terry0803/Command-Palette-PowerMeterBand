@@ -51,15 +51,29 @@ internal sealed partial class PowerDockBand : WrappedDockItem, IDisposable
             }
 
             var s = _sampler.Read();
-            _item.Title = s.SystemWatts is double w ? $"{w:0.0} W" : "-- W";
+
+            // Plugged in, whole-system power can't be measured, so show what the user picked.
+            var showCpu = s.PluggedIn && DisplaySettings.PluggedIn == PluggedInDisplay.CpuPower;
+            var charging = s.PluggedIn && !showCpu && s.BatteryRateMilliwatts >= 0;
+            _item.Title = showCpu
+                ? s.CpuWatts is double c ? $"{c:0.0} W" : "-- W"
+                : charging
+                    ? $"+{s.BatteryRateMilliwatts / 1000.0:0} W" // No decimal: "+xx.x W" overflows the fixed label slot.
+                    : s.SystemWatts is double w ? $"{w:0.0} W" : "-- W";
 
             var parts = new List<string>();
-            if (s.CpuWatts is double cpu)
+            if (s.PluggedIn)
+            {
+                parts.Add(showCpu ? "插電中（顯示 CPU 功率）" : "插電中");
+            }
+
+            if (!showCpu && s.CpuWatts is double cpu)
             {
                 parts.Add($"CPU {cpu:0.0} W");
             }
 
-            if (s.BatteryRateMilliwatts is int rate && rate != 0)
+            // While charging the title already shows the charge rate.
+            if (!charging && s.BatteryRateMilliwatts is int rate && rate != 0)
             {
                 parts.Add(rate > 0 ? $"充電 {rate / 1000.0:0.0} W" : $"放電 {-rate / 1000.0:0.0} W");
             }
