@@ -53,18 +53,20 @@ internal sealed partial class PowerDockBand : WrappedDockItem, IDisposable
             var s = _sampler.Read();
 
             // Plugged in, whole-system power can't be measured, so show what the user picked.
+            // The battery flow is negative when the charger can't keep up and the battery helps.
             var showCpu = s.PluggedIn && DisplaySettings.PluggedIn == PluggedInDisplay.CpuPower;
-            var charging = s.PluggedIn && !showCpu && s.BatteryRateMilliwatts >= 0;
+            var showFlow = s.PluggedIn && !showCpu && s.BatteryRateMilliwatts is not null;
+            var flow = s.BatteryRateMilliwatts ?? 0;
             _item.Title = showCpu
                 ? s.CpuWatts is double c ? $"{c:0.0} W" : "-- W"
-                : charging
-                    ? $"+{s.BatteryRateMilliwatts / 1000.0:0} W" // No decimal: "+xx.x W" overflows the fixed label slot.
+                : showFlow
+                    ? $"{(flow >= 0 ? "+" : "-")}{Math.Abs(flow) / 1000.0:0} W" // No decimal: "+xx.x W" overflows the fixed label slot.
                     : s.SystemWatts is double w ? $"{w:0.0} W" : "-- W";
 
             var parts = new List<string>();
             if (s.PluggedIn)
             {
-                parts.Add(showCpu ? "插電中（顯示 CPU 功率）" : "插電中");
+                parts.Add(showCpu ? "插電中（顯示 CPU 功率）" : flow < 0 ? "插電中（電池補電）" : "插電中");
             }
 
             if (!showCpu && s.CpuWatts is double cpu)
@@ -72,8 +74,8 @@ internal sealed partial class PowerDockBand : WrappedDockItem, IDisposable
                 parts.Add($"CPU {cpu:0.0} W");
             }
 
-            // While charging the title already shows the charge rate.
-            if (!charging && s.BatteryRateMilliwatts is int rate && rate != 0)
+            // When showing the battery flow, the title already has the charge rate.
+            if (!showFlow && s.BatteryRateMilliwatts is int rate && rate != 0)
             {
                 parts.Add(rate > 0 ? $"充電 {rate / 1000.0:0.0} W" : $"放電 {-rate / 1000.0:0.0} W");
             }

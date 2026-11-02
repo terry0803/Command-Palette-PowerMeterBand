@@ -139,6 +139,7 @@ internal sealed partial class PowerDetailsPage : ContentPage
             ["status"] = s.BatteryStatus switch
             {
                 BatteryStatus.Charging => "充電中",
+                BatteryStatus.Discharging when s.PluggedIn => "插電（電池補電）",
                 BatteryStatus.Discharging => "使用電池",
                 BatteryStatus.Idle => "接上電源",
                 BatteryStatus.NotPresent => "沒有電池",

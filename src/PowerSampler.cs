@@ -16,16 +16,17 @@ internal sealed record PowerSnapshot(
 
 /// <summary>
 /// Reads power data. Prefers the ACPI "Power Meter" counter for whole-system draw
-/// and falls back to the battery discharge rate. The meter only reports while on
-/// battery; plugged in it reads 0 and nothing measures whole-system draw.
+/// and falls back to the battery discharge rate. Both only describe the whole system
+/// while on battery: plugged in, the meter reads 0, and if the charger can't keep up
+/// the battery only covers part of the draw, so whole-system power is left unknown.
 /// </summary>
 internal sealed class PowerSampler : IDisposable
 {
-    private PerformanceCounter? _systemPower = TryCounter("Power Meter", "Power", "Power Meter (0)");
-    private PerformanceCounter? _cpuPower = TryCounter("Energy Meter", "Power", "RAPL_Package0_PKG");
+    private readonly RetryingCounter _systemPower = new("Power Meter", "Power", "Power Meter (0)");
+    private readonly RetryingCounter _cpuPower = new("Energy Meter", "Power", "RAPL_Package0_PKG");
 
     // RAPL PP1 is the integrated GPU's power plane (verified: ~0.04 W idle, up to 13 W under a WebGL load).
-    private PerformanceCounter? _gpuPower = TryCounter("Energy Meter", "Power", "RAPL_Package0_PP1");
+    private readonly RetryingCounter _gpuPower = new("Energy Meter", "Power", "RAPL_Package0_PP1");
 
     public PowerSnapshot Read()
     {
@@ -39,19 +40,21 @@ internal sealed class PowerSampler : IDisposable
         }
 
         var rate = report?.ChargeRateInMilliwatts;
-        var system = ReadCounterWatts(ref _systemPower) is double w && w > 0
-            ? w
-            : rate < 0 ? -rate / 1000.0 : null;
+        var pluggedIn = IsPluggedIn();
+        var meter = _systemPower.ReadWatts();
+        double? system = pluggedIn
+            ? null
+            : meter is double w && w > 0 ? w : rate < 0 ? -rate / 1000.0 : null;
 
         return new PowerSnapshot(
             system,
-            ReadCounterWatts(ref _cpuPower),
-            ReadCounterWatts(ref _gpuPower),
+            _cpuPower.ReadWatts(),
+            _gpuPower.ReadWatts(),
             rate,
             report?.RemainingCapacityInMilliwattHours,
             report?.FullChargeCapacityInMilliwattHours,
             report?.Status,
-            IsPluggedIn());
+            pluggedIn);
     }
 
     private static bool IsPluggedIn()
@@ -66,44 +69,69 @@ internal sealed class PowerSampler : IDisposable
         }
     }
 
-    private static PerformanceCounter? TryCounter(string category, string counter, string instance)
-    {
-        try
-        {
-            var c = new PerformanceCounter(category, counter, instance, readOnly: true);
-            c.NextValue();
-            return c;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    // Power Meter / Energy Meter counters report milliwatts.
-    private static double? ReadCounterWatts(ref PerformanceCounter? counter)
-    {
-        if (counter is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            return counter.NextValue() / 1000.0;
-        }
-        catch
-        {
-            counter.Dispose();
-            counter = null;
-            return null;
-        }
-    }
-
     public void Dispose()
     {
-        _systemPower?.Dispose();
-        _cpuPower?.Dispose();
-        _gpuPower?.Dispose();
+        _systemPower.Dispose();
+        _cpuPower.Dispose();
+        _gpuPower.Dispose();
+    }
+
+    /// <summary>
+    /// A performance counter that is recreated after it fails to open or read
+    /// (e.g. counters not ready right after sign-in), retrying every 30 seconds.
+    /// </summary>
+    private sealed class RetryingCounter(string category, string counter, string instance) : IDisposable
+    {
+        private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(30);
+
+        private PerformanceCounter? _counter;
+        private DateTime _nextAttempt = DateTime.MinValue;
+
+        // Power Meter / Energy Meter counters report milliwatts.
+        public double? ReadWatts()
+        {
+            if (_counter is null)
+            {
+                if (DateTime.UtcNow < _nextAttempt)
+                {
+                    return null;
+                }
+
+                _counter = TryCreate();
+                if (_counter is null)
+                {
+                    _nextAttempt = DateTime.UtcNow + RetryInterval;
+                    return null;
+                }
+            }
+
+            try
+            {
+                return _counter.NextValue() / 1000.0;
+            }
+            catch
+            {
+                _counter.Dispose();
+                _counter = null;
+                _nextAttempt = DateTime.UtcNow + RetryInterval;
+                return null;
+            }
+        }
+
+        private PerformanceCounter? TryCreate()
+        {
+            try
+            {
+                var c = new PerformanceCounter(category, counter, instance, readOnly: true);
+                c.NextValue();
+                return c;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        public void Dispose() => _counter?.Dispose();
     }
 }
