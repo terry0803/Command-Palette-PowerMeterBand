@@ -15,9 +15,9 @@ internal sealed partial class PowerDockBand : WrappedDockItem, IDisposable
         IconHelpers.FromRelativePath("Assets\\bolt-light.svg").Light,
         IconHelpers.FromRelativePath("Assets\\bolt-dark.svg").Dark);
 
-    // Fixed label slot sized so a two-digit value ("xx.x W") leaves a 44px
-    // (at 200% scale) trailing gap, 1px more than the built-in Performance Monitor bands.
-    private const double LabelWidthDips = 43;
+    // Fixed label slot sized so a two-digit value ("xx.x W") leaves the same 43px
+    // (at 200% scale) trailing gap as the built-in Performance Monitor bands.
+    private const double LabelWidthDips = 42.5;
 
     private readonly DockValueListItem _item;
     private readonly PowerSampler _sampler = new();
