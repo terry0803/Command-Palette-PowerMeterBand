@@ -1,0 +1,10 @@
+# Build output
+src/bin/
+src/obj/
+src/out/
+
+# Packaging output: MSIX, certificates, SDK tools (downloaded by the build script)
+dist/
+
+*.user
+.vs/
