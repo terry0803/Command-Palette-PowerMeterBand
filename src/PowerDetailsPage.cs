@@ -124,6 +124,8 @@ internal sealed partial class PowerDetailsPage : ContentPage
         Update(new PowerSnapshot(null, null, null, null, null, null, null, false));
     }
 
+    private string? _lastJson;
+
     public override IContent[] GetContent() => [_form];
 
     public void Update(PowerSnapshot s)
@@ -158,7 +160,15 @@ internal sealed partial class PowerDetailsPage : ContentPage
         data["timeLabel"] = label;
         data["timeRemaining"] = time;
 
-        _form.DataJson = data.ToJsonString();
+        // Skip unchanged data so the host doesn't re-render the card for nothing.
+        var json = data.ToJsonString();
+        if (json == _lastJson)
+        {
+            return;
+        }
+
+        _form.DataJson = json;
+        _lastJson = json;
     }
 
     private static string FormatWatts(double? watts) => watts is double w ? $"{w:0.0} W" : "--";
