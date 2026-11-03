@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
 using Windows.Devices.Power;
+using Windows.System.Power;
 
 namespace PowerMeterBand;
 
@@ -17,8 +18,15 @@ internal sealed partial class BatteryBand : WrappedDockItem, IDisposable
     // The same reservation as the built-in percentage bands.
     private const string LabelWidth = "text:100%";
 
+    // Battery readings change slowly, so rather than every second: right away when Windows reports the
+    // charger plugged or unplugged, charging starting or stopping, or the percent changing, and every
+    // 30 seconds for the rest (charge rate, time left).
+    private const int RefreshMs = 30_000;
+
     private readonly DockValueListItem _item;
     private readonly Lock _lock = new();
+    private readonly CoalescedWork _refresh;
+    private readonly Timer _timer;
     private IconInfo? _shownIcon;
     private bool _disposed;
 
@@ -31,8 +39,22 @@ internal sealed partial class BatteryBand : WrappedDockItem, IDisposable
         _item = new DockValueListItem(DetailsPage, LabelWidth) { Title = "--", Icon = BatteryGlyphs.Full };
         Items = [_item];
 
-        DockTicker.Subscribe(Update);
+        _refresh = new CoalescedWork(Update);
+        try
+        {
+            PowerManager.PowerSupplyStatusChanged += OnPowerChanged;
+            PowerManager.BatteryStatusChanged += OnPowerChanged;
+            PowerManager.RemainingChargePercentChanged += OnPowerChanged;
+        }
+        catch
+        {
+            // Without the events, the 30-second refresh still keeps it current.
+        }
+
+        _timer = new Timer(_ => _refresh.Request(), null, 0, RefreshMs);
     }
+
+    private void OnPowerChanged(object? sender, object e) => _refresh.Request();
 
     private void Update()
     {
@@ -65,7 +87,16 @@ internal sealed partial class BatteryBand : WrappedDockItem, IDisposable
         lock (_lock)
         {
             _disposed = true;
-            DockTicker.Unsubscribe(Update);
+            _timer.Dispose();
+            try
+            {
+                PowerManager.PowerSupplyStatusChanged -= OnPowerChanged;
+                PowerManager.BatteryStatusChanged -= OnPowerChanged;
+                PowerManager.RemainingChargePercentChanged -= OnPowerChanged;
+            }
+            catch
+            {
+            }
         }
     }
 }
@@ -242,7 +273,7 @@ internal sealed partial class BatteryPage : ContentPage
             {
               "type": "TextBlock",
               "spacing": "extraLarge",
-              "text": "健康度是充飽時的容量和出廠設計容量的比例。每秒更新。",
+              "text": "健康度是充飽時的容量和出廠設計容量的比例。插拔電源、開始或停止充電、電量改變時立即更新，其餘每 30 秒更新。",
               "size": "small",
               "isSubtle": true,
               "wrap": true
