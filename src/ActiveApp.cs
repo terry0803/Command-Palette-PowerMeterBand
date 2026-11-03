@@ -260,6 +260,12 @@ internal sealed class ForegroundAppTracker : IDisposable
         "XamlExplorerHostIslandWindow", "MultitaskingViewFrame", "ForegroundStaging", "TaskListThumbnailWnd",
     };
 
+    // The taskbar and its tray, where clicking an icon can pop up a program's own little window.
+    private static readonly HashSet<string> TrayClasses = new(StringComparer.Ordinal)
+    {
+        "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "NotifyIconOverflowWindow", "TopLevelWindowForOverflowXamlIsland",
+    };
+
     private readonly Native.WinEventProc _onWinEvent; // Kept in fields so the callbacks aren't collected.
     private readonly Native.TimerProc _onRecheck;
     private readonly Native.TimerProc _onResync;
@@ -274,8 +280,15 @@ internal sealed class ForegroundAppTracker : IDisposable
     private IntPtr _closeHook;
     private IntPtr _titleHook;
 
-    // When the Dock or another shell surface last took the foreground (Environment.TickCount64).
-    private long _shellForegroundAt;
+    // When the taskbar or its tray last took the foreground (Environment.TickCount64), and the popup it
+    // opened (if any), which keeps being passed over while it has the foreground, for half a minute at most.
+    private long _trayForegroundAt;
+    private IntPtr _trayPopup;
+    private long _trayPopupSince;
+
+    // When the desktop took the foreground while the app in front was still on screen, or 0. That's
+    // often a double-click on a desktop icon, so 桌面 waits for the app to open; see OnResync.
+    private long _desktopSince;
     private uint _watchedPid;
 
     public ForegroundAppTracker()
@@ -324,16 +337,42 @@ internal sealed class ForegroundAppTracker : IDisposable
     {
         var foreground = Native.GetForegroundWindow();
         bool missed;
+        var desktopDue = false;
         lock (_lock)
         {
+            // The usual case, the app shown still in front (or a tray popup being passed over): nothing to look up.
+            if (_desktopSince == 0 && ((foreground == Current.Window && !Current.IsFrameOnly) || IsTrayPopup(foreground)))
+            {
+                return;
+            }
+
             // Also catches a Store app attaching to the frame that was named for it.
-            missed = (foreground != Current.Window || Current.IsFrameOnly)
-                && Describe(foreground, _names) is { IsDesktop: false } app && app != Current;
+            var app = IsTrayPopup(foreground) ? null : Describe(foreground, _names);
+            missed = (foreground != Current.Window || Current.IsFrameOnly) && app is { IsDesktop: false } && app != Current;
+
+            // The desktop has kept the foreground: show 桌面 once a second has passed with nothing starting
+            // (Windows shows its app-starting cursor while a program it launched gets going), 20 at most.
+            if (_desktopSince != 0)
+            {
+                var waited = Environment.TickCount64 - _desktopSince;
+                if (app is not { IsDesktop: true })
+                {
+                    _desktopSince = 0;
+                }
+                else
+                {
+                    desktopDue = waited >= 1000 && (waited >= 20_000 || !Native.AppIsStarting());
+                }
+            }
         }
 
         if (missed)
         {
             Refresh(foreground);
+        }
+        else if (desktopDue)
+        {
+            Refresh(foreground, force: true, desktopDue: true);
         }
     }
 
@@ -416,7 +455,8 @@ internal sealed class ForegroundAppTracker : IDisposable
         }
     }
 
-    private void Refresh(IntPtr window, bool force = false)
+    // DesktopDue: the desktop has had the foreground long enough to show 桌面 (see OnResync).
+    private void Refresh(IntPtr window, bool force = false, bool desktopDue = false)
     {
         lock (_lock)
         {
@@ -425,26 +465,68 @@ internal sealed class ForegroundAppTracker : IDisposable
                 return;
             }
 
-            var app = Describe(window, _names);
+            // Like a Mac's menu bar extras, what a tray icon pops up doesn't change the app in front:
+            // a popup window (see LooksLikePopup) taking the foreground just after the taskbar or tray did.
+            // App windows opened from there (a title bar, or a good part of the screen) still switch.
+            var now = Environment.TickCount64;
+            if (TrayClasses.Contains(Native.ClassName(window)))
+            {
+                _trayForegroundAt = now;
+            }
+
+            ActiveApp? app;
+            if (IsTrayPopup(window))
+            {
+                app = null;
+            }
+            else if (window != IntPtr.Zero && now - _trayForegroundAt < 1500 && Native.LooksLikePopup(window))
+            {
+                (_trayPopup, _trayPopupSince) = (window, now);
+                app = null;
+            }
+            else
+            {
+                _trayPopup = IntPtr.Zero;
+                app = Describe(window, _names);
+            }
+
             var currentOnScreen = !Current.IsDesktop && Native.IsWindowVisible(Current.Window) && !Native.IsIconic(Current.Window);
+
+            // Closed, or hidden away (an app that keeps running in the tray): not just minimized.
+            var currentGone = !Current.IsDesktop && (!Native.IsWindow(Current.Window) || !Native.IsWindowVisible(Current.Window));
             if (app is null)
             {
                 // A shell surface or the Dock: keep the current app while its window is still on screen.
-                _shellForegroundAt = Environment.TickCount64;
                 if (currentOnScreen)
                 {
                     return;
                 }
 
-                app = ActiveApp.Desktop;
+                app = currentGone ? NextApp() : ActiveApp.Desktop;
             }
-            else if (app.IsDesktop && currentOnScreen && Environment.TickCount64 - _shellForegroundAt < 1000)
+            else if (app.IsDesktop && currentGone)
             {
-                // Closing a Dock flyout (PowerToys 0.103) hands the foreground to the desktop rather than
-                // back to the app, which is still on screen; that isn't the user choosing the desktop.
+                // The app in front closed its window and Windows gave the foreground to the desktop instead of
+                // the window underneath: show the app now on top, as a Mac would (桌面 only if there's none).
+                app = NextApp();
+            }
+            else if (app.IsDesktop && currentOnScreen && !desktopDue)
+            {
+                // The app in front is still on screen, so this is either the user clicking the desktop or
+                // the foreground falling to it: closing a Dock flyout (PowerToys 0.103), a tray icon's popup
+                // or a menu hands it there rather than back to the app. Only a click, with the pointer over
+                // the desktop, counts. Even then it's quite likely the start of a double-click that opens an
+                // app, so keep showing the app in front until the new one opens rather than flash 桌面 while
+                // it starts; 桌面 comes only if the desktop keeps the foreground (OnResync).
+                if (Native.PointerOverDesktop() && _desktopSince == 0)
+                {
+                    _desktopSince = Environment.TickCount64;
+                }
+
                 return;
             }
 
+            _desktopSince = 0;
             if (app == Current)
             {
                 return;
@@ -457,6 +539,13 @@ internal sealed class ForegroundAppTracker : IDisposable
         WatchApp(Current);
         Changed?.Invoke();
     }
+
+    private bool IsTrayPopup(IntPtr window) =>
+        window != IntPtr.Zero && window == _trayPopup && Environment.TickCount64 - _trayPopupSince < 30_000;
+
+    // The app whose window is now on top, or the desktop when no app window is showing.
+    private ActiveApp NextApp() =>
+        TopAppWindow(_names) is var top && top != IntPtr.Zero && Describe(top, _names) is { } next ? next : ActiveApp.Desktop;
 
     private static string ReadTitle(ActiveApp app) =>
         app.IsDesktop ? string.Empty : WithoutAppName(Native.WindowText(app.Window), app.Name);
@@ -511,7 +600,10 @@ internal sealed class ForegroundAppTracker : IDisposable
 
         // Overlays that take the foreground for a moment, like the Snipping Tool's capture screen and
         // Click to Do, are tool windows; keep showing the app underneath (which is what gets captured).
-        if (ShellClasses.Contains(windowClass) || Native.IsToolWindow(window))
+        // So are hidden windows: a tray icon hands the foreground to its program's hidden window before
+        // showing a menu (the usual way to make the menu close properly), which isn't switching apps.
+        // A program that shows its window just after taking the foreground is caught by OnResync.
+        if (ShellClasses.Contains(windowClass) || Native.IsToolWindow(window) || !Native.IsWindowVisible(window))
         {
             return null;
         }
@@ -655,6 +747,53 @@ internal static partial class Native
     [DllImport("user32.dll")]
     public static extern bool IsWindow(IntPtr window);
 
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorInfo(ref CursorInfo info);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr LoadCursor(IntPtr instance, nint name);
+
+    private static readonly IntPtr AppStartingCursor = LoadCursor(IntPtr.Zero, 32650); // IDC_APPSTARTING
+
+    // Windows' arrow-with-spinner cursor, shown while a program it launched (from the desktop, Start
+    // or the taskbar) is starting up.
+    public static bool AppIsStarting()
+    {
+        var info = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
+        return GetCursorInfo(ref info) && info.Cursor == AppStartingCursor;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CursorInfo
+    {
+        public int Size;
+        public int Flags;
+        public IntPtr Cursor;
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out Point point);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr WindowFromPoint(Point point);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr window, uint flags);
+
+    // Whether the pointer is over the desktop itself (its wallpaper or icons), not a window, the
+    // taskbar or the Dock.
+    public static bool PointerOverDesktop() =>
+        GetCursorPos(out var point) && ClassName(GetAncestor(WindowFromPoint(point), 2 /* GA_ROOT */)) is "Progman" or "WorkerW";
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Point
+    {
+        public int X;
+        public int Y;
+    }
+
     // The process a window belongs to, or 0 once the window is gone.
     public static uint OwnerOf(IntPtr window)
     {
@@ -749,6 +888,25 @@ internal static partial class Native
 
     // Floating palettes and overlays, which stay out of the taskbar and Alt+Tab.
     public static bool IsToolWindow(IntPtr window) => (GetWindowLongPtr(window, GwlExStyle).ToInt64() & WsExToolWindow) != 0;
+
+    // What tray icons pop up, unlike app windows: no title bar, and a quarter of the screen at most.
+    // (Neither the desktop nor an app window someone keeps on top looks like that.)
+    public static bool LooksLikePopup(IntPtr window)
+    {
+        if (!IsWindowVisible(window) || (GetWindowLongPtr(window, -16 /* GWL_STYLE */).ToInt64() & WsCaption) == WsCaption
+            || ClassName(window) is "Progman" or "WorkerW")
+        {
+            return false;
+        }
+
+        var (outer, _) = WindowBounds(window);
+        var screen = WorkArea(window);
+        long area = (long)(outer.Right - outer.Left) * (outer.Bottom - outer.Top);
+        long screenArea = (long)(screen.Right - screen.Left) * (screen.Bottom - screen.Top);
+        return area * 4 <= screenArea;
+    }
+
+    private const long WsCaption = 0x00C00000;
 
     // Windows on other virtual desktops and suspended Store apps are "visible" but cloaked.
     public static bool IsCloaked(IntPtr window) =>

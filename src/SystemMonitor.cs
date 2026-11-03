@@ -8,6 +8,7 @@ using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
 using Microsoft.Win32;
 using Windows.Storage;
+using static PowerMeterBand.Pdh;
 
 namespace PowerMeterBand;
 
@@ -130,12 +131,21 @@ internal sealed record SystemSnapshot(
 /// </summary>
 internal sealed class SystemSampler : IDisposable
 {
-    private readonly RetryingCounter _cpuTime = new("Processor Information", "% Processor Time", "_Total");
-    private readonly RetryingCounter _cpuPerformance = new("Processor Information", "% Processor Performance", "_Total");
-    private readonly RetryingCounter _cpuFrequency = new("Processor Information", "Processor Frequency", "_Total");
-    private readonly RetryingCounter _committed = new("Memory", "Committed Bytes", string.Empty);
-    private readonly RetryingCounter _commitLimit = new("Memory", "Commit Limit", string.Empty);
-    private readonly RetryingCounter _cached = new("Memory", "Cache Bytes", string.Empty);
+    private const int CpuTime = 0;
+    private const int CpuPerformance = 1;
+    private const int CpuFrequency = 2;
+    private const int Committed = 3;
+    private const int CommitLimit = 4;
+    private const int Cached = 5;
+
+    // The built-in band's CPU and memory counters, read together in one query.
+    private readonly CounterSet _counters = new(
+        @"\Processor Information(_Total)\% Processor Time",
+        @"\Processor Information(_Total)\% Processor Performance",
+        @"\Processor Information(_Total)\Processor Frequency",
+        @"\Memory\Committed Bytes",
+        @"\Memory\Commit Limit",
+        @"\Memory\Cache Bytes");
 
     private readonly GpuUsage _gpu = new();
 
@@ -159,20 +169,21 @@ internal sealed class SystemSampler : IDisposable
         ulong? used = hasMemory ? memory.TotalPhysical - memory.AvailablePhysical : null;
 
         // "% Processor Performance" is the frequency relative to base, so it can go past 100% while boosting.
-        var frequency = _cpuFrequency.Read();
-        var performance = _cpuPerformance.Read();
+        _counters.Collect();
+        var frequency = _counters.Value(CpuFrequency);
+        var performance = _counters.Value(CpuPerformance);
         var tenthsOfKelvin = ReadTemperature();
 
         var snapshot = new SystemSnapshot(
-            _cpuTime.Read() is float cpu ? Math.Clamp(cpu, 0, 100) : null,
+            _counters.Value(CpuTime) is float cpu ? Math.Clamp(cpu, 0, 100) : null,
             frequency is float mhz && performance is float percent ? mhz * percent / 100 / 1000 : null,
             _gpu.Read(),
             tenthsOfKelvin is float t and > 0 ? (t / 10.0) - 273.15 : null,
             total,
             used,
-            _committed.Read(),
-            _commitLimit.Read(),
-            _cached.Read());
+            _counters.Value(Committed),
+            _counters.Value(CommitLimit),
+            _counters.Value(Cached));
 
         CpuChart.Add(snapshot.CpuPercent);
         GpuChart.Add(snapshot.GpuPercent);
@@ -213,12 +224,7 @@ internal sealed class SystemSampler : IDisposable
 
     public void Dispose()
     {
-        _cpuTime.Dispose();
-        _cpuPerformance.Dispose();
-        _cpuFrequency.Dispose();
-        _committed.Dispose();
-        _commitLimit.Dispose();
-        _cached.Dispose();
+        _counters.Dispose();
         _temperature?.Dispose();
         _gpu.Dispose();
     }
@@ -419,21 +425,6 @@ internal sealed class SystemSampler : IDisposable
             (_buffer, _bufferSize) = (IntPtr.Zero, 0);
         }
 
-        [DllImport("pdh.dll", EntryPoint = "PdhOpenQueryW", CharSet = CharSet.Unicode)]
-        private static extern uint PdhOpenQuery(string? dataSource, IntPtr userData, out IntPtr query);
-
-        [DllImport("pdh.dll", EntryPoint = "PdhAddEnglishCounterW", CharSet = CharSet.Unicode)]
-        private static extern uint PdhAddEnglishCounter(IntPtr query, string path, IntPtr userData, out IntPtr counter);
-
-        [DllImport("pdh.dll")]
-        private static extern uint PdhCollectQueryData(IntPtr query);
-
-        [DllImport("pdh.dll", EntryPoint = "PdhGetFormattedCounterArrayW")]
-        private static extern uint PdhGetFormattedCounterArray(IntPtr counter, uint format, ref uint bufferSize, out uint itemCount, IntPtr buffer);
-
-        [DllImport("pdh.dll")]
-        private static extern uint PdhCloseQuery(IntPtr query);
-
         // PDH_FMT_COUNTERVALUE_ITEM_W with a double value, laid out for 64-bit Windows.
         [StructLayout(LayoutKind.Sequential)]
         private struct Item
@@ -442,6 +433,121 @@ internal sealed class SystemSampler : IDisposable
             public uint Status;
             public double Value;
         }
+    }
+}
+
+/// <summary>
+/// Several performance counters in one PDH query, read together once a second without allocating.
+/// A counter that can't be added reads null and is added again every 30 seconds; if the query can't be
+/// read at all, it's opened again after 30 seconds (counters can be missing right after sign-in). A rate
+/// (like % Processor Time) needs two samples, so it reads null on the first.
+/// </summary>
+internal sealed class CounterSet(params string[] englishPaths) : IDisposable
+{
+    private const uint Format = 0x200 | 0x8000; // PDH_FMT_DOUBLE | PDH_FMT_NOCAP100
+    private const long RetryAfterMs = 30_000;
+
+    private readonly IntPtr[] _counters = new IntPtr[englishPaths.Length];
+    private IntPtr _query;
+    private long _retryAt;
+    private long _addMissingAt;
+    private bool _collected;
+
+    public void Collect()
+    {
+        _collected = false;
+        if (_query == IntPtr.Zero)
+        {
+            if (Environment.TickCount64 < _retryAt)
+            {
+                return;
+            }
+
+            if (PdhOpenQuery(null, IntPtr.Zero, out _query) != 0)
+            {
+                _query = IntPtr.Zero;
+                _retryAt = Environment.TickCount64 + RetryAfterMs;
+                return;
+            }
+
+            _addMissingAt = 0;
+        }
+
+        // A counter that couldn't be added (not there yet) is tried again every 30 seconds.
+        if (Environment.TickCount64 >= _addMissingAt && Array.IndexOf(_counters, IntPtr.Zero) >= 0)
+        {
+            for (var i = 0; i < englishPaths.Length; i++)
+            {
+                if (_counters[i] == IntPtr.Zero && PdhAddEnglishCounter(_query, englishPaths[i], IntPtr.Zero, out var counter) == 0)
+                {
+                    _counters[i] = counter;
+                }
+            }
+
+            _addMissingAt = Environment.TickCount64 + RetryAfterMs;
+        }
+
+        if (PdhCollectQueryData(_query) != 0)
+        {
+            Close();
+            _retryAt = Environment.TickCount64 + RetryAfterMs;
+            return;
+        }
+
+        _collected = true;
+    }
+
+    // The value from the last Collect, or null.
+    public float? Value(int index) =>
+        _collected && _counters[index] != IntPtr.Zero
+        && PdhGetFormattedCounterValue(_counters[index], Format, out _, out var value) == 0 && value.Status <= 1 // valid or new data
+            ? (float)value.Value
+            : null;
+
+    private void Close()
+    {
+        if (_query != IntPtr.Zero)
+        {
+            PdhCloseQuery(_query);
+        }
+
+        _query = IntPtr.Zero;
+        Array.Clear(_counters);
+        _collected = false;
+    }
+
+    public void Dispose() => Close();
+}
+
+/// <summary>
+/// The PDH functions the counter readers share.
+/// </summary>
+internal static class Pdh
+{
+    [DllImport("pdh.dll", EntryPoint = "PdhOpenQueryW", CharSet = CharSet.Unicode)]
+    public static extern uint PdhOpenQuery(string? dataSource, IntPtr userData, out IntPtr query);
+
+    [DllImport("pdh.dll", EntryPoint = "PdhAddEnglishCounterW", CharSet = CharSet.Unicode)]
+    public static extern uint PdhAddEnglishCounter(IntPtr query, string path, IntPtr userData, out IntPtr counter);
+
+    [DllImport("pdh.dll")]
+    public static extern uint PdhCollectQueryData(IntPtr query);
+
+    [DllImport("pdh.dll", EntryPoint = "PdhGetFormattedCounterArrayW")]
+    public static extern uint PdhGetFormattedCounterArray(IntPtr counter, uint format, ref uint bufferSize, out uint itemCount, IntPtr buffer);
+
+    [DllImport("pdh.dll")]
+    public static extern uint PdhGetFormattedCounterValue(IntPtr counter, uint format, out uint type, out CounterValue value);
+
+    [DllImport("pdh.dll")]
+    public static extern uint PdhCloseQuery(IntPtr query);
+
+    // PDH_FMT_COUNTERVALUE with a double value, laid out for 64-bit Windows.
+    [StructLayout(LayoutKind.Sequential)]
+    public struct CounterValue
+    {
+        public uint Status;
+        public double Value;
     }
 }
 

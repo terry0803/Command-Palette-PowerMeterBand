@@ -41,7 +41,10 @@ internal sealed class PowerSampler : IDisposable
 
         var rate = report?.ChargeRateInMilliwatts;
         var pluggedIn = IsPluggedIn();
-        var meter = _systemPower.ReadWatts();
+
+        // Plugged in, the meter's reading would be thrown away below, so don't read it. (It's an
+        // instant reading, not a rate, so there's no baseline to keep for when the charger comes off.)
+        var meter = pluggedIn == false ? _systemPower.ReadWatts() : null;
 
         // Only a sure "on battery" makes the meter or discharge rate the whole system's draw: plugged in
         // with the battery helping out, the discharge rate is only part of it.

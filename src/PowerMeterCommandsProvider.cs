@@ -11,6 +11,7 @@ public partial class PowerMeterCommandsProvider : CommandProvider
     private readonly ActiveAppBand _activeApp = new();
     private readonly SystemMonitorBand _monitor = new();
     private readonly ClockBand _clock = new();
+    private readonly BatteryBand _battery = new();
     private readonly ICommandItem[] _commands;
 
     public PowerMeterCommandsProvider()
@@ -35,7 +36,7 @@ public partial class PowerMeterCommandsProvider : CommandProvider
 
     public override ICommandItem[] TopLevelCommands() => _commands;
 
-    public override ICommandItem[] GetDockBands() => [_band, _netBand, _systemMenu, _activeApp, _monitor, _clock];
+    public override ICommandItem[] GetDockBands() => [_band, _netBand, _systemMenu, _activeApp, _monitor, _battery, _clock];
 
     public override void Dispose()
     {
@@ -43,6 +44,7 @@ public partial class PowerMeterCommandsProvider : CommandProvider
         _netBand.Dispose();
         _activeApp.Dispose();
         _monitor.Dispose();
+        _battery.Dispose();
         _clock.Dispose();
         GC.SuppressFinalize(this);
         base.Dispose();

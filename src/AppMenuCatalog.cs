@@ -37,7 +37,14 @@ internal static class AppMenuCatalog
     private const ushort Slash = 0xBF;
     private const ushort BracketLeft = 0xDB;
     private const ushort BracketRight = 0xDD;
+    private const ushort Insert = 0x2D;
+    private const ushort NumpadPlus = 0x6B;
+    private const ushort NumpadMinus = 0x6D;
+    private const ushort F2 = 0x71;
+    private const ushort F3 = 0x72;
     private const ushort F5 = 0x74;
+    private const ushort F8 = 0x77;
+    private const ushort F10 = 0x79;
     private const ushort F11 = 0x7A;
     private const ushort F12 = 0x7B;
     private const ushort Plus = 0xBB; // VK_OEM_PLUS, the =/+ key
@@ -875,6 +882,33 @@ internal static class AppMenuCatalog
             ("前往", [Key("上一頁", "Alt+←", 0xE72B, Alt, Left)]),
         ],
         FileMenu: [CloseWindow()]),
+
+        // Git Bash's terminal, mintty, with its default shortcuts (mintty's manual). Ctrl+C would interrupt
+        // what's running, so copy and paste are Ctrl+Insert and Shift+Insert; closing ends the shell, so
+        // 檔案 only opens another window.
+        new("mintty", ["mintty.exe"],
+        [
+            ("檢視",
+            [
+                Key("放大字型", "Ctrl+數字鍵 +", 0xE8A3, Ctrl, NumpadPlus),
+                Key("縮小字型", "Ctrl+數字鍵 -", 0xE71F, Ctrl, NumpadMinus),
+                Key("原始字型大小", "Ctrl+0", 0xE71E, Ctrl, '0'),
+                Key("預設視窗大小", "Alt+F10", 0xE9A6, Alt, F10),
+                Key("全螢幕", "Alt+F11", 0xE740, Alt, F11),
+            ]),
+            ("終端機",
+            [
+                Key("下一個視窗", "Ctrl+Tab", 0xE72A, Ctrl, Tab),
+                Key("重設⋯", "Alt+F8", 0xE72C, Alt, F8),
+            ]),
+        ],
+        FileMenu: [Key("新視窗", "Alt+F2", 0xE78B, Alt, F2)],
+        EditMenu:
+        [
+            Key("複製", "Ctrl+Insert", 0xE8C8, Ctrl, Insert),
+            Key("貼上", "Shift+Insert", 0xE77F, Shift, Insert),
+            Key("搜尋⋯", "Alt+F3", 0xE721, Alt, F3),
+        ]),
     ];
 
     /// <summary>

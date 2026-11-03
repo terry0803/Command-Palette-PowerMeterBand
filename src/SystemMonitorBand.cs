@@ -197,7 +197,9 @@ internal sealed partial class SystemMonitorPage : ContentPage
 
             // The thermal zone is the processor chip, which only covers the GPU when it's built in.
             ["gpuTemperature"] = _hardware.GpuIsIntegrated && s.Temperature is double gt ? $"{gt:0} °C" : "--",
-            ["gpuTemperatureNote"] = _hardware.GpuIsIntegrated ? "與 CPU 同一顆晶片" : "讀不到 GPU 溫度",
+            // Windows offers no GPU sensor here; a built-in GPU gets the processor's thermal zone as a
+            // reference, labeled as such (on Core Ultra it sits on its own tile, so it can differ).
+            ["gpuTemperatureNote"] = _hardware.GpuIsIntegrated ? "ACPI 參考溫度，非 GPU 感測器" : "讀不到 GPU 溫度",
             ["gpuUsage"] = SystemMonitorBand.Percent(s.GpuPercent),
             ["memoryUsed"] = s.MemoryUsed is ulong memoryUsed ? Bytes(memoryUsed) : "--",
             ["memoryUsage"] = SystemMonitorBand.Percent(s.MemoryPercent),

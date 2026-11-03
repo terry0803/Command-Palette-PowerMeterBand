@@ -53,7 +53,7 @@ internal static partial class ClassicMenu
         [
             new ListItem(DockCommands.AfterDismiss(() =>
             {
-                if (Native.OwnerOf(window) == owner)
+                if (Native.OwnerOf(window) == owner && IsWindowEnabled(window))
                 {
                     AppWindows.Activate(window);
                     PostMessage(window, WmSysCommand, (IntPtr)ScKeyMenu, (IntPtr)mnemonic);
@@ -101,7 +101,10 @@ internal static partial class ClassicMenu
             }
         }
 
-        return MenuAt(window, path, out enabled);
+        // While the program has a dialog open, its window is disabled and its own menu bar does nothing.
+        var opened = MenuAt(window, path, out enabled);
+        enabled &= IsWindowEnabled(window);
+        return opened;
     }
 
     // Follows the path as the menus stand now, without telling the program.
@@ -266,6 +269,9 @@ internal static partial class ClassicMenu
 
     [DllImport("user32.dll")]
     private static extern bool GetMenuInfo(IntPtr menu, ref MenuInfo info);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowEnabled(IntPtr window);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetMenuString(IntPtr menu, uint item, StringBuilder text, int max, uint flags);

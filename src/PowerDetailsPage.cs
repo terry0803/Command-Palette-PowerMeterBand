@@ -159,7 +159,7 @@ internal sealed partial class PowerDetailsPage : ContentPage
                 : "--",
         };
 
-        var (label, time) = EstimateTime(s);
+        var (label, time) = EstimateTime(s.RemainingMilliwattHours, s.FullChargeMilliwattHours, s.BatteryRateMilliwatts);
         data["timeLabel"] = label;
         data["timeRemaining"] = time;
 
@@ -176,9 +176,10 @@ internal sealed partial class PowerDetailsPage : ContentPage
 
     private static string FormatWatts(double? watts) => watts is double w ? $"{w:0.0} W" : "--";
 
-    private static (string Label, string Time) EstimateTime(PowerSnapshot s)
+    // From the battery's own capacity and charge rate; shared with the battery page so both agree.
+    internal static (string Label, string Time) EstimateTime(int? remainingMilliwattHours, int? fullMilliwattHours, int? rateMilliwatts)
     {
-        if (s is not { RemainingMilliwattHours: int rem, BatteryRateMilliwatts: int rate })
+        if (remainingMilliwattHours is not int rem || rateMilliwatts is not int rate)
         {
             return ("預估剩餘時間", "--");
         }
@@ -188,7 +189,7 @@ internal sealed partial class PowerDetailsPage : ContentPage
             return ("預估剩餘時間", FormatHours((double)rem / -rate));
         }
 
-        if (rate > 0 && s.FullChargeMilliwattHours is int full && full > rem)
+        if (rate > 0 && fullMilliwattHours is int full && full > rem)
         {
             return ("預估充飽時間", FormatHours((double)(full - rem) / rate));
         }
