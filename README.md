@@ -2,7 +2,9 @@
 
 在 [PowerToys Command Palette](https://learn.microsoft.com/windows/powertoys/command-palette/overview) 的 Dock 上，即時顯示整台電腦目前的耗電功率，另外附即時網速、合併的 CPU／GPU／記憶體監視器、合併的日期時間，以及仿 Mac 頂欄左側的系統選單和目前 App 名稱。
 
-![Dock 上的即時耗電功率](docs/dock.png)
+![Dock 左側：系統選單、目前的 App 和它的選單](docs/dock-left.png)
+
+![Dock 右側：耗電功率、網速、CPU／GPU／記憶體、電池、日期與時間](docs/dock.png)
 
 ## 功能
 
