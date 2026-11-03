@@ -17,9 +17,9 @@ internal sealed partial class NetSpeedDockBand : WrappedDockItem, IDisposable
         IconHelpers.FromRelativePath("Assets\\arrow-down-light.svg").Light,
         IconHelpers.FromRelativePath("Assets\\arrow-down-dark.svg").Dark);
 
-    // Fits the widest value ("1023 Kbps", "99.9 Mbps") and leaves a typical "xx.x Kbps" the same
+    // Fits the widest value ("1023 Kb", "99.9 Mb") and leaves a typical "xx.x Kb" the same
     // 43px (at 200% scale) trailing gap as the other bands. The built-in "10ch" left ~57px.
-    private const string LabelWidth = "text:000.0 Kbps";
+    private const string LabelWidth = "text:000.0 Kb";
 
     private readonly DockValueListItem _item;
     private readonly NetSpeedSampler _sampler = new();
@@ -66,7 +66,7 @@ internal sealed partial class NetSpeedDockBand : WrappedDockItem, IDisposable
                 _shownDirection = direction;
             }
 
-            _item.Title = NetSpeedFormat.BitsPerSecond(Pick(s, direction));
+            _item.Title = NetSpeedFormat.CompactBitsPerSecond(Pick(s, direction));
             _item.Subtitle = $"{NetSpeedSettings.Describe(direction)} · {NetSpeedSettings.Describe(other)} {NetSpeedFormat.BitsPerSecond(Pick(s, other))}";
             DetailsPage.Update(s);
         }

@@ -60,7 +60,7 @@ internal sealed partial class NetSpeedDetailsPage : ContentPage
             {
               "type": "TextBlock",
               "spacing": "extraLarge",
-              "text": "統計所有實體網卡，不含 VPN 和虛擬網卡。單位跟 PowerToys 內建的網速相同（1 Kbps = 1024 bps）。每秒更新。",
+              "text": "統計所有實體網卡，不含 VPN 和虛擬網卡。單位跟 PowerToys 內建的網速相同（1 Kbps = 1024 bps），Dock 上的 Kb、Mb、Gb 是 Kbps、Mbps、Gbps 的簡寫。每秒更新。",
               "size": "small",
               "isSubtle": true,
               "wrap": true

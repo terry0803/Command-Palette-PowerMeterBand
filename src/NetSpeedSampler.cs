@@ -155,7 +155,19 @@ internal sealed class NetSpeedSampler
 /// </summary>
 internal static class NetSpeedFormat
 {
-    public static string BitsPerSecond(double? bytesPerSecond)
+    private static readonly string[] FullUnits = [" Kbps", " Mbps", " Gbps"];
+
+    // "Kbps" alone is wider than a whole "76%", so the Dock drops "ps".
+    // The lowercase b still says bits, not bytes.
+    private static readonly string[] CompactUnits = [" Kb", " Mb", " Gb"];
+
+    // "65.1 Kbps", for the details page and tooltip.
+    public static string BitsPerSecond(double? bytesPerSecond) => Format(bytesPerSecond, FullUnits);
+
+    // "65.1 Kb", for the Dock.
+    public static string CompactBitsPerSecond(double? bytesPerSecond) => Format(bytesPerSecond, CompactUnits);
+
+    private static string Format(double? bytesPerSecond, string[] units)
     {
         if (bytesPerSecond is not double value)
         {
@@ -163,17 +175,14 @@ internal static class NetSpeedFormat
         }
 
         value = value * 8 / 1024;
-        foreach (var unit in new[] { "Kbps", "Mbps" })
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1)
         {
-            if (value < 1024)
-            {
-                return Format(value, unit);
-            }
-
             value /= 1024;
+            unit++;
         }
 
-        return Format(value, "Gbps");
+        return string.Format(CultureInfo.InvariantCulture, value < 100 ? "{0:0.0}{1}" : "{0:0}{1}", value, units[unit]);
     }
 
     public static string LinkSpeed(ulong bitsPerSecond) => bitsPerSecond switch
@@ -182,7 +191,4 @@ internal static class NetSpeedFormat
         >= 1_000_000_000 => $"{bitsPerSecond / 1e9:0.#} Gbps",
         _ => $"{bitsPerSecond / 1e6:0} Mbps",
     };
-
-    private static string Format(double value, string unit) =>
-        string.Format(CultureInfo.InvariantCulture, value < 100 ? "{0:0.0} {1}" : "{0:0} {1}", value, unit);
 }
