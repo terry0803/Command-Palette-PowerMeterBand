@@ -13,10 +13,11 @@ internal sealed partial class DockValueListItem : ListItem, IExtendedAttributesP
 {
     private readonly ValueSet _attributes = new();
 
-    public DockValueListItem(ICommand command, double titleWidthDips)
+    // titleWidth is DIPs (double), "Nch" or "text:sample", like the toolkit's DockLabelWidth.
+    public DockValueListItem(ICommand command, object titleWidth)
         : base(command)
     {
-        _attributes["Microsoft.CommandPalette.Dock.TitleWidth"] = titleWidthDips;
+        _attributes["Microsoft.CommandPalette.Dock.TitleWidth"] = titleWidth;
         _attributes["Microsoft.CommandPalette.Dock.TabularDigits"] = true;
     }
 

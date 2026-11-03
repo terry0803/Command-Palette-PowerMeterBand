@@ -1,6 +1,6 @@
 # Command Palette PowerMeterBand
 
-在 [PowerToys Command Palette](https://learn.microsoft.com/windows/powertoys/command-palette/overview) 的 Dock 上，即時顯示整台電腦目前的耗電功率。
+在 [PowerToys Command Palette](https://learn.microsoft.com/windows/powertoys/command-palette/overview) 的 Dock 上，即時顯示整台電腦目前的耗電功率，另外附一個即時網速項目。
 
 ![Dock 上的即時耗電功率](docs/dock.png)
 
@@ -11,6 +11,7 @@
 - **詳細資訊頁**：點一下會在命令選擇區打開詳細頁面，顯示整機功率、CPU 封裝功率、GPU 功率、電池充放電、電量（Wh）和預估剩餘或充飽時間。
 - **跟內建項目一致**：圖示亮度、間距、等寬數字都跟內建的效能監視器（CPU、記憶體、電池）相同，數字跳動時寬度不變。
 - **佔用很少**：約 0.4% 的單一 CPU 核心、約 60 MB 記憶體。
+- **即時網速**：另一個 Dock 項目，只顯示上傳或下載其中一個，可以在它的詳細資訊頁切換，設定會保留。圖示是方框裡放箭頭，跟閃電圖示同一個風格。速度單位、統計的網卡（只算實體網卡，不含 VPN 和虛擬網卡）、標籤寬度都跟 PowerToys 內建的網速項目相同。
 
 ![詳細資訊頁](docs/details.png)
 
@@ -22,6 +23,7 @@
 | CPU 封裝功率 | `\Energy Meter(RAPL_Package0_PKG)\Power`（Intel RAPL） |
 | GPU 功率 | `\Energy Meter(RAPL_Package0_PP1)\Power`（Intel RAPL 內顯電源平面） |
 | 電池 | `Windows.Devices.Power.Battery` |
+| 網速 | `GetIfTable2` 的實體網卡收發位元組數，每秒相減 |
 
 ACPI 電源計量器量的是「從電池流出的電」，**插電時讀數是 0**，筆電也沒有其他感測器能量整機用電，所以整機功率只在使用電池時有數值。
 
@@ -56,7 +58,7 @@ Get-Counter '\Power Meter(*)\Power', '\Energy Meter(*)\Power'
    .\src\build-and-install.ps1 -Version 1.0.0.0
    ```
 
-6. 把它加到 Dock：在命令選擇區搜尋「即時耗電功率」，使用「Pin to Dock」；也可以進入 Dock 的編輯模式，用「Add band」加入。
+6. 把它加到 Dock：在命令選擇區搜尋「即時耗電功率」或「即時網速」，使用「Pin to Dock」；也可以進入 Dock 的編輯模式，用「Add band」加入。
 
 之後修改程式碼，只要用**更大的版本號**再執行一次腳本就能更新，例如 `-Version 1.0.1.0`。版本號沒有比已安裝的大，腳本會直接擋下來。
 
@@ -68,11 +70,15 @@ src/
   PowerDockBand.cs             Dock 上的項目（每秒更新）
   PowerDetailsPage.cs          點擊後的詳細資訊頁（Adaptive Card）
   PluggedInDisplay.cs          插電時顯示內容的設定與切換按鈕
+  NetSpeedSampler.cs           讀取網卡流量、換算網速
+  NetSpeedDockBand.cs          Dock 上的網速項目（每秒更新）
+  NetSpeedDetailsPage.cs       網速的詳細資訊頁
+  NetSpeedDirection.cs         顯示上傳或下載的設定與切換按鈕
   DockValueListItem.cs         固定標籤寬度、等寬數字
   PowerMeterCommandsProvider.cs / PowerMeterExtension.cs / Program.cs
                                Command Palette 擴充套件的進入點
   AppxManifest.xml             MSIX 套件資訊
-  Assets/                      圖示（閃電 SVG 分深色、淺色兩版）
+  Assets/                      圖示（閃電和上下箭頭 SVG，各分深色、淺色兩版）
   build-and-install.ps1        編譯 → 打包 → 簽章 → 安裝
 ```
 

@@ -6,6 +6,7 @@ namespace PowerMeterBand;
 public partial class PowerMeterCommandsProvider : CommandProvider
 {
     private readonly PowerDockBand _band = new();
+    private readonly NetSpeedDockBand _netBand = new();
     private readonly ICommandItem[] _commands;
 
     public PowerMeterCommandsProvider()
@@ -20,16 +21,22 @@ public partial class PowerMeterCommandsProvider : CommandProvider
                 Title = "即時耗電功率",
                 Subtitle = "查看整機、CPU 與電池的即時功率",
             },
+            new CommandItem(_netBand.DetailsPage)
+            {
+                Title = "即時網速",
+                Subtitle = "查看上傳與下載速度",
+            },
         ];
     }
 
     public override ICommandItem[] TopLevelCommands() => _commands;
 
-    public override ICommandItem[] GetDockBands() => [_band];
+    public override ICommandItem[] GetDockBands() => [_band, _netBand];
 
     public override void Dispose()
     {
         _band.Dispose();
+        _netBand.Dispose();
         GC.SuppressFinalize(this);
         base.Dispose();
     }
