@@ -132,16 +132,18 @@ internal sealed partial class PowerDetailsPage : ContentPage
     {
         var data = new JsonObject
         {
-            ["systemPower"] = s.SystemWatts is null && s.PluggedIn ? "插電時無法量測" : FormatWatts(s.SystemWatts),
+            ["systemPower"] = s.SystemWatts is null && s.PluggedIn == true ? "插電時無法量測" : FormatWatts(s.SystemWatts),
             ["cpuPower"] = FormatWatts(s.CpuWatts),
             ["gpuPower"] = FormatWatts(s.GpuWatts),
             ["pluggedInDisplay"] = DisplaySettings.Describe(DisplaySettings.PluggedIn),
             ["status"] = s.BatteryStatus switch
             {
                 BatteryStatus.Charging => "充電中",
-                BatteryStatus.Discharging when s.PluggedIn => "插電（電池補電）",
+                BatteryStatus.Discharging when s.PluggedIn == true => "插電（電池補電）",
+                BatteryStatus.Discharging when s.PluggedIn is null => "放電中（電源狀態不明）",
                 BatteryStatus.Discharging => "使用電池",
-                BatteryStatus.Idle => "接上電源",
+                BatteryStatus.Idle when s.PluggedIn == true => "接上電源",
+                BatteryStatus.Idle => "未充放電", // Idle only says the battery's rate is zero.
                 BatteryStatus.NotPresent => "沒有電池",
                 _ => "--",
             },

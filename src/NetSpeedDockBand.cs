@@ -23,7 +23,6 @@ internal sealed partial class NetSpeedDockBand : WrappedDockItem, IDisposable
 
     private readonly DockValueListItem _item;
     private readonly NetSpeedSampler _sampler = new();
-    private readonly Timer _timer;
     private readonly Lock _lock = new();
     private NetSpeedDirection? _shownDirection;
     private bool _disposed;
@@ -40,13 +39,13 @@ internal sealed partial class NetSpeedDockBand : WrappedDockItem, IDisposable
         };
         Items = [_item];
 
-        _timer = new Timer(Update, null, TimeSpan.Zero, TimeSpan.FromSeconds(1));
+        DockTicker.Subscribe(Update);
     }
 
     public static IconInfo IconFor(NetSpeedDirection direction) =>
         direction == NetSpeedDirection.Upload ? UploadIcon : DownloadIcon;
 
-    private void Update(object? state)
+    private void Update()
     {
         lock (_lock)
         {
@@ -80,7 +79,7 @@ internal sealed partial class NetSpeedDockBand : WrappedDockItem, IDisposable
         lock (_lock)
         {
             _disposed = true;
-            _timer.Dispose();
+            DockTicker.Unsubscribe(Update);
         }
     }
 }

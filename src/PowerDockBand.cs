@@ -21,7 +21,6 @@ internal sealed partial class PowerDockBand : WrappedDockItem, IDisposable
 
     private readonly DockValueListItem _item;
     private readonly PowerSampler _sampler = new();
-    private readonly Timer _timer;
     private readonly Lock _lock = new();
     private bool _disposed;
 
@@ -38,10 +37,10 @@ internal sealed partial class PowerDockBand : WrappedDockItem, IDisposable
         };
         Items = [_item];
 
-        _timer = new Timer(Update, null, TimeSpan.Zero, TimeSpan.FromSeconds(1));
+        DockTicker.Subscribe(Update);
     }
 
-    private void Update(object? state)
+    private void Update()
     {
         lock (_lock)
         {
@@ -54,8 +53,9 @@ internal sealed partial class PowerDockBand : WrappedDockItem, IDisposable
 
             // Plugged in, whole-system power can't be measured, so show what the user picked.
             // The battery flow is negative when the charger can't keep up and the battery helps.
-            var showCpu = s.PluggedIn && DisplaySettings.PluggedIn == PluggedInDisplay.CpuPower;
-            var showFlow = s.PluggedIn && !showCpu && s.BatteryRateMilliwatts is not null;
+            var pluggedIn = s.PluggedIn == true;
+            var showCpu = pluggedIn && DisplaySettings.PluggedIn == PluggedInDisplay.CpuPower;
+            var showFlow = pluggedIn && !showCpu && s.BatteryRateMilliwatts is not null;
             var flow = s.BatteryRateMilliwatts ?? 0;
             _item.Title = showCpu
                 ? s.CpuWatts is double c ? $"{c:0.0} W" : "-- W"
@@ -64,9 +64,13 @@ internal sealed partial class PowerDockBand : WrappedDockItem, IDisposable
                     : s.SystemWatts is double w ? $"{w:0.0} W" : "-- W";
 
             var parts = new List<string>();
-            if (s.PluggedIn)
+            if (pluggedIn)
             {
                 parts.Add(showCpu ? "插電中（顯示 CPU 功率）" : flow < 0 ? "插電中（電池補電）" : "插電中");
+            }
+            else if (s.PluggedIn is null)
+            {
+                parts.Add("電源狀態不明");
             }
 
             if (!showCpu && s.CpuWatts is double cpu)
@@ -90,7 +94,7 @@ internal sealed partial class PowerDockBand : WrappedDockItem, IDisposable
         lock (_lock)
         {
             _disposed = true;
-            _timer.Dispose();
+            DockTicker.Unsubscribe(Update);
             _sampler.Dispose();
         }
     }

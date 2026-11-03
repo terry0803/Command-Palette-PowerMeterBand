@@ -70,7 +70,7 @@ internal sealed partial class ToggleNetSpeedDirectionCommand : InvokableCommand
     public ToggleNetSpeedDirectionCommand()
     {
         Id = "com.terry.powermeter.toggleNetSpeedDirection";
-        Icon = new IconInfo(""); // Switch
+        Icon = new IconInfo("\uE8AB"); // Switch
         UpdateName();
     }
 

@@ -12,7 +12,7 @@ internal sealed record PowerSnapshot(
     int? RemainingMilliwattHours,
     int? FullChargeMilliwattHours,
     BatteryStatus? BatteryStatus,
-    bool PluggedIn);
+    bool? PluggedIn); // Null when Windows can't say
 
 /// <summary>
 /// Reads power data. Prefers the ACPI "Power Meter" counter for whole-system draw
@@ -42,7 +42,10 @@ internal sealed class PowerSampler : IDisposable
         var rate = report?.ChargeRateInMilliwatts;
         var pluggedIn = IsPluggedIn();
         var meter = _systemPower.ReadWatts();
-        double? system = pluggedIn
+
+        // Only a sure "on battery" makes the meter or discharge rate the whole system's draw: plugged in
+        // with the battery helping out, the discharge rate is only part of it.
+        double? system = pluggedIn != false
             ? null
             : meter is double w && w > 0 ? w : rate < 0 ? -rate / 1000.0 : null;
 
@@ -57,7 +60,7 @@ internal sealed class PowerSampler : IDisposable
             pluggedIn);
     }
 
-    private static bool IsPluggedIn()
+    private static bool? IsPluggedIn()
     {
         try
         {
@@ -65,7 +68,7 @@ internal sealed class PowerSampler : IDisposable
         }
         catch
         {
-            return false;
+            return null;
         }
     }
 
@@ -75,63 +78,68 @@ internal sealed class PowerSampler : IDisposable
         _cpuPower.Dispose();
         _gpuPower.Dispose();
     }
+}
 
-    /// <summary>
-    /// A performance counter that is recreated after it fails to open or read
-    /// (e.g. counters not ready right after sign-in), retrying every 30 seconds.
-    /// </summary>
-    private sealed class RetryingCounter(string category, string counter, string instance) : IDisposable
+/// <summary>
+/// A performance counter that is recreated after it fails to open or read
+/// (e.g. counters not ready right after sign-in), retrying every 30 seconds.
+/// </summary>
+internal sealed class RetryingCounter(string category, string counter, string instance) : IDisposable
+{
+    // Milliseconds since boot, which setting the clock back doesn't stretch.
+    private const long RetryIntervalMs = 30_000;
+
+    private PerformanceCounter? _counter;
+    private long _nextAttempt;
+
+    // Power Meter / Energy Meter counters report milliwatts.
+    public double? ReadWatts() => Read() / 1000.0;
+
+    public float? Read()
     {
-        private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(30);
-
-        private PerformanceCounter? _counter;
-        private DateTime _nextAttempt = DateTime.MinValue;
-
-        // Power Meter / Energy Meter counters report milliwatts.
-        public double? ReadWatts()
+        if (_counter is null)
         {
+            if (Environment.TickCount64 < _nextAttempt)
+            {
+                return null;
+            }
+
+            _counter = TryCreate();
             if (_counter is null)
             {
-                if (DateTime.UtcNow < _nextAttempt)
-                {
-                    return null;
-                }
-
-                _counter = TryCreate();
-                if (_counter is null)
-                {
-                    _nextAttempt = DateTime.UtcNow + RetryInterval;
-                    return null;
-                }
-            }
-
-            try
-            {
-                return _counter.NextValue() / 1000.0;
-            }
-            catch
-            {
-                _counter.Dispose();
-                _counter = null;
-                _nextAttempt = DateTime.UtcNow + RetryInterval;
+                _nextAttempt = Environment.TickCount64 + RetryIntervalMs;
                 return null;
             }
         }
 
-        private PerformanceCounter? TryCreate()
+        try
         {
-            try
-            {
-                var c = new PerformanceCounter(category, counter, instance, readOnly: true);
-                c.NextValue();
-                return c;
-            }
-            catch
-            {
-                return null;
-            }
+            return _counter.NextValue();
         }
-
-        public void Dispose() => _counter?.Dispose();
+        catch
+        {
+            _counter.Dispose();
+            _counter = null;
+            _nextAttempt = Environment.TickCount64 + RetryIntervalMs;
+            return null;
+        }
     }
+
+    private PerformanceCounter? TryCreate()
+    {
+        PerformanceCounter? c = null;
+        try
+        {
+            c = new PerformanceCounter(category, counter, instance, readOnly: true);
+            c.NextValue();
+            return c;
+        }
+        catch
+        {
+            c?.Dispose();
+            return null;
+        }
+    }
+
+    public void Dispose() => _counter?.Dispose();
 }

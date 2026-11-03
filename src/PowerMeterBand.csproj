@@ -6,6 +6,7 @@
     <SelfContained>true</SelfContained>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>PowerMeterBand</RootNamespace>
     
     <CsWinRTWindowsMetadata>C:\Windows\System32\WinMetadata</CsWinRTWindowsMetadata>
@@ -16,6 +17,7 @@
     <PackageReference Include="Microsoft.CommandPalette.Extensions" Version="0.12.260812002" />
     <PackageReference Include="Shmuelie.WinRTServer" Version="2.2.1" />
     <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="10.0.0" />
+    <PackageReference Include="System.Management" Version="10.0.0" />
   </ItemGroup>
 
   <ItemGroup>
