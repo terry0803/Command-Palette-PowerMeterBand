@@ -47,6 +47,7 @@ internal static class AppMenuCatalog
     private const ushort F10 = 0x79;
     private const ushort F11 = 0x7A;
     private const ushort F12 = 0x7B;
+    private const ushort Delete = 0x2E;
     private const ushort Plus = 0xBB; // VK_OEM_PLUS, the =/+ key
     private const ushort Minus = 0xBD;
     private const ushort Semicolon = 0xBA;
@@ -872,9 +873,44 @@ internal static class AppMenuCatalog
         [
             "systemsettings.exe", "samsungsettingshost.exe", "ivedevicecareclient.exe", "nearbydevices.exe",
             "intelgraphicssoftware.exe", "quickshare.exe", "smartthings.exe", "samsungpass.exe", "feedbackhub.exe",
+            "sechealthui.exe", "samsungflow.exe", "phone.exe", "samsungcamerashare.exe", "samsungstorageshare.exe",
+            "stickynotesstub.exe", // Sticky Notes 4's package holds only this launcher and upgrade screen.
         ],
         [],
         FileMenu: [CloseWindow()]),
+
+        // Bulk Crap Uninstaller, with the hotkeys from its source (MainWindow.SetupHotkeys). The ones on an
+        // app act on what's selected in its list, and BCU takes them only while that list has the focus, so
+        // they're sent only then: Delete in its search box or a file dialog would do something else.
+        // Uninstalling asks first. Ctrl+B exports the selected apps' uninstall registry keys to a .reg file.
+        new("bcuninstaller", ["bcuninstaller.exe"],
+        [
+            ("解除安裝",
+            [
+                ListKey("解除安裝⋯", "Delete", 0xE74D, Delete),
+                ListKey("靜默解除安裝⋯", "Shift+Delete", 0xE74D, Shift, Delete),
+                ListKey("手動解除安裝⋯", "Ctrl+Shift+Delete", 0xE74D, Ctrl, Shift, Delete),
+                ListKey("內容", "Alt+Enter", 0xE946, Alt, Enter),
+                ListKey("備份登錄資料⋯", "Ctrl+B", 0xE777, Ctrl, 'B'),
+                ListKey("在登錄編輯程式開啟", "Ctrl+R", 0xE8A7, Ctrl, 'R'),
+            ]),
+            ("檢視",
+            [
+                Key("重新整理清單", "F5", 0xE72C, F5),
+                Key("搜尋⋯", "Ctrl+F", 0xE721, Ctrl, 'F'),
+                Key("設定⋯", "Ctrl+P", 0xE713, Ctrl, 'P'),
+            ]),
+        ],
+        FileMenu:
+        [
+            Key("載入清單⋯", "Ctrl+O", 0xE8E5, Ctrl, 'O'),
+            CloseWindow(),
+        ],
+        EditMenu:
+        [
+            ListKey("複製完整資訊", "Ctrl+C", 0xE8C8, Ctrl, 'C'),
+            Key("搜尋⋯", "Ctrl+F", 0xE721, Ctrl, 'F'),
+        ]),
 
         // PowerToys Settings and Samsung Multi Control also go back a page with Alt+←.
         new("settingsback", ["powertoys.settings.exe", "multicontrolwinui.exe"],
@@ -934,6 +970,12 @@ internal static class AppMenuCatalog
 
     private static MenuEntry Key(string title, string shortcut, int glyph, params ushort[] chord) =>
         new(title, shortcut, glyph, app => Keys.SendTo(app, chord));
+
+    // A key Bulk Crap Uninstaller takes only while the app list in its main window has the focus; not sent
+    // otherwise. Its main window's title always starts with the program's name (translations keep it), and
+    // its other windows (leftover removal, for one) have lists of their own.
+    private static MenuEntry ListKey(string title, string shortcut, int glyph, params ushort[] chord) =>
+        new(title, shortcut, glyph, app => Keys.SendTo(app, () => Keys.FocusIsListIn("Bulk Crap Uninstaller"), chord));
 
     // Opens the folder in a new window; typing into the current window's address bar is too fragile.
     private static MenuEntry Folder(string title, string path, int glyph) =>

@@ -133,7 +133,11 @@ internal sealed partial class ClockPage : ContentPage
 
     public override IContent[] GetContent() => [_form];
 
-    public void Update(DateTime now)
+    // Made every second, open or not: making it only while open saved nothing measurable, and telling
+    // whether the page is open (having the Dock fetch it again) can miss and leave the time stuck.
+    public void Update(DateTime now) => _form.DataJson = Json(now);
+
+    private string Json(DateTime now)
     {
         // The region is read once a minute too, so a change in Windows' settings shows up.
         if (now.Minute != _lastMinute)
@@ -155,7 +159,7 @@ internal sealed partial class ClockPage : ContentPage
         }
 
         var zone = TimeZoneInfo.Local;
-        _form.DataJson = new JsonObject
+        return new JsonObject
         {
             ["time"] = now.ToString("tt h:mm:ss", zh),
             ["date"] = _date,

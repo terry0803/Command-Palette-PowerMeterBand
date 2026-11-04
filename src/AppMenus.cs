@@ -157,8 +157,19 @@ internal static class Keys
 
     // The palette has just closed, so bring the app back first. Keys always go to whatever has
     // the foreground, so if the app doesn't get it, press nothing rather than hit another window.
-    public static void SendTo(ActiveApp app, params ushort[] chord)
+    public static void SendTo(ActiveApp app, params ushort[] chord) => SendTo(app, null, chord);
+
+    // When: checked just before pressing, once the app is in front (e.g. that the right control has the focus).
+    public static void SendTo(ActiveApp app, Func<bool>? when, params ushort[] chord)
     {
+        // Injected keys add to whatever the user still holds (Shift left down would turn Ctrl+C into
+        // Ctrl+Shift+C, and Shift with the Alt tap that activating may need can switch the input
+        // language), so wait for modifiers to be let go first, and give up if they aren't.
+        if (!ModifiersReleased())
+        {
+            return;
+        }
+
         if (!HasForeground(app))
         {
             // Bring back only the app's own window, not whatever got its handle after it closed.
@@ -182,23 +193,52 @@ internal static class Keys
             Thread.Sleep(150);
         }
 
-        // Injected keys add to whatever the user still holds (Shift left down would turn Ctrl+C into
-        // Ctrl+Shift+C), so wait for modifiers to be let go, and give up if they aren't.
+        // Pressed again in the meantime (unlikely, but the chord would change): leave it.
         if (!ModifiersReleased())
         {
             return;
         }
 
         // Focus can move during those waits; a paste must never land in some other window.
-        if (HasForeground(app))
+        if (HasForeground(app) && (when is null || when()))
         {
             Press(chord);
         }
     }
 
+    // Whether the keyboard focus is in a list view (any toolkit's wrapper of the common control) whose window's
+    // title starts with mainTitle: the app's main window, not a dialog or another window of it with a list
+    // of its own, nor a text box.
+    public static bool FocusIsListIn(string mainTitle)
+    {
+        var info = new GuiThreadInfo { Size = Marshal.SizeOf<GuiThreadInfo>() };
+        var thread = Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out _);
+        return GetGUIThreadInfo(thread, ref info) && info.Focus != IntPtr.Zero
+            && Native.ClassName(info.Focus).Contains("SysListView32", StringComparison.Ordinal)
+            && Native.WindowText(Native.RootOf(info.Focus)).StartsWith(mainTitle, StringComparison.Ordinal);
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetGUIThreadInfo(uint thread, ref GuiThreadInfo info);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GuiThreadInfo
+    {
+        public int Size;
+        public uint Flags;
+        public IntPtr Active;
+        public IntPtr Focus;
+        public IntPtr Capture;
+        public IntPtr MenuOwner;
+        public IntPtr MoveSize;
+        public IntPtr Caret;
+        public int Left, Top, Right, Bottom;
+    }
+
     private static readonly ushort[] Modifiers = [Shift, Control, Alt, LeftWindows, 0x5C /* right Windows */];
 
-    private static bool ModifiersReleased()
+    // Waits up to a second for Shift, Ctrl, Alt and the Windows keys to be let go.
+    public static bool ModifiersReleased()
     {
         for (var waited = 0; waited <= 1000; waited += 20)
         {

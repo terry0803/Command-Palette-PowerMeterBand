@@ -53,7 +53,8 @@
     - 小算盤：記憶、檢視；「檔案」只有關閉視窗，「編輯」只有複製和貼上，因為它的 `Ctrl+N`、`Ctrl+O`、`Ctrl+S` 會算 e^x、cosh、sinh，`Ctrl+P` 會改記憶
     - Samsung Notes：格式、檢視、工具（依 App 內按 F1 的快捷鍵清單）；列印是 `Ctrl+Shift+P`，筆記開著時 `Ctrl+N` 是新增頁面
     - 三星媒體瀏覽器：相片、檢視；它的 `Ctrl+N` 是用選取的項目做影片、`Ctrl+V` 會把檔案複製進目前的相簿，所以「檔案」「編輯」是它自己的版本
-    - 設定類 App（Windows 設定、PowerToys 設定、Samsung Settings、Quick Share、SmartThings、Samsung Pass、Device Care、Multi Control、附近裝置、Intel 顯示卡軟體、意見反應中樞）：沒有東西可開啟或儲存，「檔案」只有關閉視窗；PowerToys 設定和 Multi Control 另有「上一頁」
+    - Bulk Crap Uninstaller：解除安裝（一般、靜默、手動、內容、備份登錄資料、在登錄編輯程式開啟）、檢視（重新整理、搜尋、設定），快捷鍵取自它原始碼裡的快速鍵表；針對選取程式的項目只在它的程式清單有焦點時才送出，在搜尋框或對話框裡不會誤按 Delete；它的 `Ctrl+C` 是複製選取程式的完整資訊
+    - 設定類 App（Windows 設定、PowerToys 設定、Samsung Settings（含 Galaxy Connect）、Quick Share、SmartThings、Samsung Pass、Device Care、Multi Control、附近裝置、Intel 顯示卡軟體、意見反應中樞、Windows 安全性、Samsung Flow、電話、鏡頭共享、儲存空間共享、便利貼 4 的啟動畫面）：沒有東西可開啟或儲存，「檔案」只有關閉視窗；PowerToys 設定和 Multi Control 另有「上一頁」
 
     很多 App 的一般快捷鍵另有意思，例如 Spotify 的 `Ctrl+S` 是隨機播放、Discord 和 Obsidian 的 `Ctrl+P` 是釘選訊息和命令面板、GitHub Desktop 的 `Ctrl+P` 是推送、媒體播放器的 `Ctrl+F` 是下一首、Outlook 的 `Ctrl+F` 是轉寄。這些 App 的「檔案」「編輯」都換成了它們自己的版本，或拿掉會做錯事的項目。
   - **其他程式**：檔案、編輯、視窗。

@@ -137,6 +137,15 @@ internal sealed partial class ActiveAppPage : ListPage
         }
     }
 
+    // When the extension closes, rather than waiting for the refresh to notice the menu has gone.
+    public void StopRefreshing()
+    {
+        lock (_lock)
+        {
+            StopRefresh();
+        }
+    }
+
     // Called with the lock held, only for the current timer.
     private void StopRefresh()
     {
@@ -418,8 +427,9 @@ internal static class AppWindows
         }
 
         // That isn't always enough (e.g. after a Dock flyout hands the foreground to the desktop).
-        // A process that sent the last input may set the foreground, so tap Alt and try again.
-        if (Native.GetForegroundWindow() != window)
+        // A process that sent the last input may set the foreground, so tap Alt and try again. Not while
+        // the user holds a modifier: Alt with Shift held can switch the input language.
+        if (Native.GetForegroundWindow() != window && Keys.ModifiersReleased())
         {
             Keys.Tap(Keys.Alt);
             Native.SetForegroundWindow(window);

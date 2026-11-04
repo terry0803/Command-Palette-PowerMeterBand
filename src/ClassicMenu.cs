@@ -48,7 +48,15 @@ internal static partial class ClassicMenu
     // Then the best the Dock can do is open that menu in the program itself, as Alt+its letter would.
     public static IListItem[] OpenInProgram(IntPtr window, uint owner, int topLevelIndex, string why = "這個程式的選單項目讀不到")
     {
+        // Without a letter (a title like "File" with no '&'), Windows can only activate the menu bar
+        // itself, not open that menu, so say so rather than promise this one.
         var mnemonic = Mnemonic(Text(GetMenu(window), topLevelIndex));
+        var title = mnemonic == '\0' ? "在程式裡打開選單列" : "在程式裡打開這個選單";
+        if (mnemonic == '\0')
+        {
+            why += "；這個選單沒有快速鍵字母，只能先選取選單列";
+        }
+
         return
         [
             new ListItem(DockCommands.AfterDismiss(() =>
@@ -60,7 +68,7 @@ internal static partial class ClassicMenu
                 }
             }))
             {
-                Title = "在程式裡打開這個選單",
+                Title = title,
                 Subtitle = why,
                 Icon = Glyphs.Of(0xE8A7), // OpenInNewWindow
             },

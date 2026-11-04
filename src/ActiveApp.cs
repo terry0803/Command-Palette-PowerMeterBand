@@ -235,6 +235,7 @@ internal sealed partial class ActiveAppBand : WrappedDockItem, IDisposable
     public void Dispose()
     {
         DockTicker.Unsubscribe(RefreshClassicMenus);
+        Page.StopRefreshing();
         _tracker.Dispose();
     }
 }
@@ -302,8 +303,11 @@ internal sealed class ForegroundAppTracker : IDisposable
         _onWinEvent = OnWinEvent;
         _onRecheck = OnRecheck;
         _onResync = OnResync;
-        new Thread(Run) { IsBackground = true, Name = "Foreground app tracker" }.Start();
+        _thread = new Thread(Run) { IsBackground = true, Name = "Foreground app tracker" };
+        _thread.Start();
     }
+
+    private readonly Thread _thread;
 
     public event Action? Changed;
 
@@ -717,9 +721,13 @@ internal sealed class ForegroundAppTracker : IDisposable
     // Waits (briefly) for the thread to be ready, so disposing right after creating still stops it.
     public void Dispose()
     {
-        if (_ready.Wait(2000))
+        if (_ready.Wait(2000) && Native.PostThreadMessage(_threadId, Native.WmQuit, IntPtr.Zero, IntPtr.Zero))
         {
-            Native.PostThreadMessage(_threadId, Native.WmQuit, IntPtr.Zero, IntPtr.Zero);
+            // Lets it take down its hooks and timer before going on (not from the thread itself).
+            if (Thread.CurrentThread != _thread)
+            {
+                _thread.Join(2000);
+            }
         }
     }
 }
@@ -768,6 +776,9 @@ internal static partial class Native
 
     // The window at the top of a window's owner chain (a dialog's main window), or the window itself.
     public static IntPtr RootOwner(IntPtr window) => GetAncestor(window, 3 /* GA_ROOTOWNER */);
+
+    // The top-level window a control sits in (a dialog's own window, not the one that owns it).
+    public static IntPtr RootOf(IntPtr window) => GetAncestor(window, 2 /* GA_ROOT */);
 
     [DllImport("user32.dll")]
     public static extern bool PostThreadMessage(uint threadId, uint msg, IntPtr wParam, IntPtr lParam);

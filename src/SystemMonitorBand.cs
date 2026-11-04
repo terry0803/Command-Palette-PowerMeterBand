@@ -184,7 +184,12 @@ internal sealed partial class SystemMonitorPage : ContentPage
 
     public override IContent[] GetContent() => [_form];
 
-    public void Update(SystemSnapshot s)
+    // Made every second even while the page is closed: telling whether it's open means having the Dock
+    // fetch it again now and then, and the Dock redraws the whole card then, so the charts flicker.
+    // (Measured: making it only while open saved nothing measurable, 8.9 ms of CPU a second either way.)
+    public void Update(SystemSnapshot s) => _form.DataJson = Json(s);
+
+    private string Json(SystemSnapshot s)
     {
         var data = new JsonObject
         {
@@ -213,7 +218,7 @@ internal sealed partial class SystemMonitorPage : ContentPage
             ["memoryChart"] = _sampler.MemoryChart.ImageUrl("rgb(92,158,250)", "rgb(92,158,250)", "rgb(0,34,92)"),
         };
 
-        _form.DataJson = data.ToJsonString();
+        return data.ToJsonString();
     }
 
     // Offers the two metrics the Dock isn't showing, under the icon of the one it is.
