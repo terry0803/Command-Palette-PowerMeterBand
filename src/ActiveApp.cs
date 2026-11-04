@@ -294,6 +294,9 @@ internal sealed class ForegroundAppTracker : IDisposable
     private long _desktopSince;
     private uint _watchedPid;
 
+    // The minimized window last passed over while it held the foreground, so it's looked at again only once.
+    private IntPtr _iconicRechecked;
+
     public ForegroundAppTracker()
     {
         _onWinEvent = OnWinEvent;
@@ -496,6 +499,23 @@ internal sealed class ForegroundAppTracker : IDisposable
             {
                 _trayPopup = IntPtr.Zero;
                 app = Describe(window, _names);
+
+                // A minimized window holding the foreground isn't the app in front: Windows hands the
+                // foreground to one for a moment on unlocking, before the desktop takes it back. Look once
+                // more shortly, in case it's being restored (a taskbar click), and switch then.
+                if (app is { IsDesktop: false } && Native.IsIconic(window))
+                {
+                    app = null;
+                    if (_iconicRechecked != window)
+                    {
+                        _iconicRechecked = window;
+                        Native.SetTimer(IntPtr.Zero, 0, 200, _onRecheck);
+                    }
+                }
+                else
+                {
+                    _iconicRechecked = IntPtr.Zero;
+                }
             }
 
             // Cloaked counts as off screen: that's a window left on another virtual desktop.
