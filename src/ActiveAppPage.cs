@@ -216,17 +216,34 @@ internal static class AppUsage
             return new(cpu, 0, Stopwatch.GetTimestamp(), takenAt);
         }
 
-        // This copy of the app: its own process and the ones it started (a browser's tabs, an Electron app's
-        // helpers), not another copy started separately (Excel with /x), whose windows aren't counted either.
+        // Like Task Manager's group for the app: its own process and the ones it started under the same
+        // program name, wherever they live (a browser's tabs, an Electron app's helpers, the Claude Code
+        // sessions Claude runs, which are claude.exe too). Other programs it starts (ChatGPT's codex.exe,
+        // a shell) are listed on their own there, except the WebView2 processes that draw an app's window
+        // (Teams, the new Outlook), which Task Manager also counts as the app's. Everything Explorer launches
+        // isn't Explorer's, and another copy started separately (Excel with /x) isn't this one.
+        var name = Path.GetFileName(path);
         var family = Descendants(app.ProcessId);
         var bytes = 0L;
-        foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(path)))
+        foreach (var pid in family)
         {
+            Process process;
+            try
+            {
+                process = Process.GetProcessById(pid);
+            }
+            catch
+            {
+                continue; // Exited since the snapshot.
+            }
+
             using (process)
             {
-                // Same program, in this sign-in session only: another signed-in user's copy isn't this app.
-                if (process.Id != app.ProcessId
-                    && (!family.Contains(process.Id) || SessionOf(process) != CurrentSession || Native.ProcessPath((uint)process.Id) != path))
+                // Same program name, in this sign-in session only.
+                if (pid != app.ProcessId
+                    && (SessionOf(process) != CurrentSession
+                        || Path.GetFileName(Native.ProcessPath((uint)pid)) is not string child
+                        || !(child.Equals(name, StringComparison.OrdinalIgnoreCase) || child.Equals("msedgewebview2.exe", StringComparison.OrdinalIgnoreCase))))
                 {
                     continue;
                 }
