@@ -11,13 +11,28 @@ namespace PowerMeterBand;
 /// </summary>
 internal sealed partial class ActiveAppPage : ListPage
 {
+    // While the menu is open its usage line is measured again every 2 seconds. The extension isn't told when
+    // the menu closes, so each refresh asks the Dock for the list again: once it stops asking for 5 seconds
+    // (the menu is gone), measuring stops until the menu is opened again. (Checked: the Dock asks only
+    // while the menu is shown, and not for app switches while it's closed.)
+    private const int RefreshMs = 2000;
+    private const long ClosedAfterMs = 5000;
+
     private readonly ForegroundAppTracker _tracker;
-    private readonly Lock _usageLock = new();
-    private ActiveApp? _usageApp;
-    private long _usageTime;
-    private int _usageGeneration;
+    private readonly Lock _lock = new();
+
+    // The items shown for _itemsApp with these windows, kept so a refresh only changes the usage line's
+    // text instead of handing the Dock a new list every time.
+    private ActiveApp? _itemsApp;
+    private List<IntPtr> _itemsWindows = [];
+    private IListItem[] _items = [];
+    private ListItem? _usageItem;
+
     private AppUsage.Sample _usage;
     private double? _cpuPercent;
+    private Timer? _refresh;
+    private int _refreshGeneration;
+    private long _lastAsked;
 
     public ActiveAppPage(ForegroundAppTracker tracker)
     {
@@ -51,9 +66,96 @@ internal sealed partial class ActiveAppPage : ListPage
         }
 
         var windows = AppWindows.Of(app);
+        lock (_lock)
+        {
+            var now = Environment.TickCount64;
+            _lastAsked = now;
+
+            // Opened afresh (not a refresh's own request): measure from now, CPU follows a second later.
+            if (_refresh is null || _itemsApp != app)
+            {
+                _usage = AppUsage.Measure(app);
+                _cpuPercent = null;
+
+                // A disposed timer can still run a callback already queued, so each timer gets a number and
+                // a callback from an older one only leaves: it must not stop (or update) the newer one.
+                _refresh?.Dispose();
+                var generation = ++_refreshGeneration;
+                _refresh = new Timer(_ => RefreshUsage(app, generation), null, 1000, RefreshMs);
+            }
+
+            if (_itemsApp != app || !_itemsWindows.SequenceEqual(windows))
+            {
+                _itemsApp = app;
+                _itemsWindows = windows;
+                _usageItem = new ListItem(new NoOpCommand()) { Icon = Glyphs.Of(0xE9D9) }; // Diagnostic, the same icon as the built-in CPU band
+                _items = Build(app, windows, _usageItem);
+            }
+
+            _usageItem!.Title = UsageTitle(windows.Count);
+            return _items;
+        }
+    }
+
+    // Runs on a pool thread, where an exception would take the whole extension (every Dock band) down:
+    // a failed read, or the Dock gone while telling it, stops this refresh instead.
+    private void RefreshUsage(ActiveApp app, int generation)
+    {
+        try
+        {
+            lock (_lock)
+            {
+                if (generation != _refreshGeneration)
+                {
+                    return;
+                }
+
+                if (_itemsApp != app || _tracker.Current != app || Environment.TickCount64 - _lastAsked > ClosedAfterMs)
+                {
+                    StopRefresh();
+                    return;
+                }
+
+                var sample = AppUsage.Measure(app);
+                _cpuPercent = AppUsage.CpuPercent(_usage, sample);
+                _usage = sample;
+                _usageItem!.Title = UsageTitle(_itemsWindows.Count);
+            }
+
+            // Also how the menu shows it's still open: the Dock asks for the list again only while it's shown.
+            RaiseItemsChanged();
+        }
+        catch
+        {
+            lock (_lock)
+            {
+                if (generation == _refreshGeneration)
+                {
+                    StopRefresh();
+                }
+            }
+        }
+    }
+
+    // Called with the lock held, only for the current timer.
+    private void StopRefresh()
+    {
+        _refresh?.Dispose();
+        _refresh = null;
+        _refreshGeneration++;
+    }
+
+    private string UsageTitle(int windowCount)
+    {
+        var cpu = _cpuPercent is double value ? $"CPU {value:0}%" : "CPU 計算中⋯";
+        return $"記憶體 {AppUsage.FormatBytes(_usage.PrivateBytes)} · {cpu} · {windowCount} 個視窗";
+    }
+
+    private IListItem[] Build(ActiveApp app, List<IntPtr> windows, ListItem usage)
+    {
         var items = new List<IListItem>
         {
-            UsageItem(app, windows.Count),
+            usage,
             Item("開新視窗", 0xE78B, () => AppWindows.OpenNew(app)), // NewWindow
             // Only while the app is still there: had it quit in the meantime, "others" would be everything left.
             Item("隱藏其他 App", 0xED1A, () =>
@@ -83,56 +185,6 @@ internal sealed partial class ActiveAppPage : ListPage
         return [.. items];
     }
 
-    // CPU use needs two samples, so the first look shows memory right away and fills in CPU a second later.
-    private ListItem UsageItem(ActiveApp app, int windowCount)
-    {
-        AppUsage.Sample usage;
-        double? cpuPercent;
-        lock (_usageLock)
-        {
-            if (_usageApp != app || Environment.TickCount64 - _usageTime > 5000)
-            {
-                // Each look gets a number; a CPU result from an older look (another app) is thrown away.
-                var generation = ++_usageGeneration;
-                _usageApp = app;
-                _usageTime = Environment.TickCount64;
-                _cpuPercent = null;
-                _usage = AppUsage.Measure(app);
-                var start = _usage;
-                Task.Delay(1000).ContinueWith(_ =>
-                {
-                    if (Volatile.Read(ref _usageGeneration) != generation)
-                    {
-                        return;
-                    }
-
-                    var percent = AppUsage.CpuPercent(start, AppUsage.Measure(app, memory: false));
-                    lock (_usageLock)
-                    {
-                        if (_usageGeneration != generation)
-                        {
-                            return;
-                        }
-
-                        _cpuPercent = percent;
-                    }
-
-                    RaiseItemsChanged();
-                });
-            }
-
-            usage = _usage;
-            cpuPercent = _cpuPercent;
-        }
-
-        var cpu = cpuPercent is double value ? $"CPU {value:0}%" : "CPU 計算中⋯";
-        return new ListItem(new NoOpCommand())
-        {
-            Title = $"記憶體 {AppUsage.FormatBytes(usage.PrivateBytes)} · {cpu} · {windowCount} 個視窗",
-            Icon = Glyphs.Of(0xE9D9), // Diagnostic, the same icon as the built-in CPU band
-        };
-    }
-
     private static ListItem Item(string title, int glyph, Action action) =>
         new(DockCommands.AfterDismiss(action)) { Title = title, Icon = Glyphs.Of(glyph) };
 
@@ -147,10 +199,12 @@ internal static class AppUsage
     // Memory is skipped for the second, CPU-only sample (a browser has dozens of processes to read).
     public static Sample Measure(ActiveApp app, bool memory = true)
     {
-        var cpu = new Dictionary<int, TimeSpan>();
+        // Taken before the processes are listed: one that starts while they are counts as new.
+        var takenAt = DateTime.UtcNow;
+        var cpu = new Dictionary<int, (DateTime Started, TimeSpan Time)>();
         if (Native.ProcessPath(app.ProcessId) is not string path)
         {
-            return new(cpu, 0, Stopwatch.GetTimestamp());
+            return new(cpu, 0, Stopwatch.GetTimestamp(), takenAt);
         }
 
         var bytes = 0L;
@@ -158,14 +212,16 @@ internal static class AppUsage
         {
             using (process)
             {
-                if (process.Id != app.ProcessId && Native.ProcessPath((uint)process.Id) != path)
+                // Same program, in this sign-in session only: another signed-in user's copy isn't this app.
+                if (process.Id != app.ProcessId
+                    && (SessionOf(process) != CurrentSession || Native.ProcessPath((uint)process.Id) != path))
                 {
                     continue;
                 }
 
                 try
                 {
-                    cpu[process.Id] = process.TotalProcessorTime;
+                    cpu[process.Id] = (process.StartTime.ToUniversalTime(), process.TotalProcessorTime);
                 }
                 catch
                 {
@@ -178,22 +234,59 @@ internal static class AppUsage
             }
         }
 
-        return new(cpu, bytes, Stopwatch.GetTimestamp());
+        return new(cpu, bytes, Stopwatch.GetTimestamp(), takenAt);
     }
 
-    // Share of the whole CPU, like Task Manager. Each process is compared with itself: a browser
-    // tab's process that exits mid-way must not drag the total down, and one that started counts in full.
+    // The foreground app always runs in the user's own session, the same as the extension.
+    private static readonly int CurrentSession = Process.GetCurrentProcess().SessionId;
+
+    private static int SessionOf(Process process)
+    {
+        try
+        {
+            return process.SessionId;
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+
+    // Share of the whole CPU, like Task Manager. Each process is compared with itself (its ID and start
+    // time, since IDs get reused): a browser tab's process that exits mid-way must not drag the total
+    // down. One missing from the first sample counts in full only if it started after it; one that was
+    // already running but couldn't be read then has no baseline, so it's left out rather than counted
+    // with its whole lifetime's CPU time.
     public static double CpuPercent(Sample start, Sample end)
     {
-        var used = end.Cpu.Sum(p => (p.Value - start.Cpu.GetValueOrDefault(p.Key)).TotalSeconds is var delta and > 0 ? delta : 0);
+        var used = 0.0;
+        foreach (var (pid, now) in end.Cpu)
+        {
+            TimeSpan before;
+            if (start.Cpu.TryGetValue(pid, out var then) && then.Started == now.Started)
+            {
+                before = then.Time;
+            }
+            else if (now.Started >= start.TakenAt)
+            {
+                before = TimeSpan.Zero;
+            }
+            else
+            {
+                continue;
+            }
+
+            used += Math.Max(0, (now.Time - before).TotalSeconds);
+        }
+
         return 100 * used / Stopwatch.GetElapsedTime(start.Timestamp, end.Timestamp).TotalSeconds / Environment.ProcessorCount;
     }
 
     public static string FormatBytes(long bytes) =>
         bytes >= 1L << 30 ? $"{bytes / (double)(1L << 30):0.0} GB" : $"{bytes >> 20} MB";
 
-    // CPU time so far for each of the app's processes, by process ID.
-    public readonly record struct Sample(Dictionary<int, TimeSpan> Cpu, long PrivateBytes, long Timestamp);
+    // When each of the app's processes started and its CPU time so far, by process ID; TakenAt is UTC.
+    public readonly record struct Sample(Dictionary<int, (DateTime Started, TimeSpan Time)> Cpu, long PrivateBytes, long Timestamp, DateTime TakenAt);
 }
 
 /// <summary>

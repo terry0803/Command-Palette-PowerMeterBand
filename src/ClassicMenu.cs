@@ -46,7 +46,7 @@ internal static partial class ClassicMenu
 
     // Some toolkits (Tk, for one) draw their menu items themselves, so there's no text to read.
     // Then the best the Dock can do is open that menu in the program itself, as Alt+its letter would.
-    public static IListItem[] OpenInProgram(IntPtr window, uint owner, int topLevelIndex)
+    public static IListItem[] OpenInProgram(IntPtr window, uint owner, int topLevelIndex, string why = "這個程式的選單項目讀不到")
     {
         var mnemonic = Mnemonic(Text(GetMenu(window), topLevelIndex));
         return
@@ -61,7 +61,7 @@ internal static partial class ClassicMenu
             }))
             {
                 Title = "在程式裡打開這個選單",
-                Subtitle = "這個程式的選單項目讀不到",
+                Subtitle = why,
                 Icon = Glyphs.Of(0xE8A7), // OpenInNewWindow
             },
         ];
@@ -150,6 +150,7 @@ internal static partial class ClassicMenu
         }
 
         var items = new List<IListItem>();
+        var unreadable = false;
         for (var i = 0; i < GetMenuItemCount(menu); i++)
         {
             if (Info(menu, i) is not { } info || (info.Type & MftSeparator) != 0)
@@ -160,7 +161,8 @@ internal static partial class ClassicMenu
             var (title, shortcut) = Label(Text(menu, i));
             if (title.Length == 0)
             {
-                continue; // Owner-drawn items have no text to show.
+                unreadable = true; // Owner-drawn items have no text to show.
+                continue;
             }
 
             // A grayed-out item can't be chosen, nor anything in a grayed-out menu, as in the program itself.
@@ -175,6 +177,12 @@ internal static partial class ClassicMenu
                 Subtitle = available ? shortcut : "目前無法使用",
                 Icon = (info.State & MfsChecked) != 0 ? Glyphs.Of(0xE73E) : Glyphs.None, // CheckMark
             });
+        }
+
+        // Some items drawn by the program itself couldn't be listed: offer its own menu for those.
+        if (unreadable && items.Count > 0)
+        {
+            items.AddRange(OpenInProgram(window, owner, path[0], "這個選單有些項目讀不到"));
         }
 
         return [.. items];
@@ -200,8 +208,9 @@ internal static partial class ClassicMenu
 
             AppWindows.Activate(window);
 
-            // A menu bar styled MNS_NOTIFYBYPOS reports choices by position, with WM_MENUCOMMAND.
-            if (NotifiesByPosition(window))
+            // MNS_NOTIFYBYPOS on the menu bar or on the item's own menu reports the choice by position,
+            // with WM_MENUCOMMAND (Windows checks both, as Wine's reimplementation does).
+            if (NotifiesByPosition(GetMenu(window)) || NotifiesByPosition(menu))
             {
                 PostMessage(window, WmMenuCommand, position, menu);
             }
@@ -211,10 +220,10 @@ internal static partial class ClassicMenu
             }
         });
 
-    private static bool NotifiesByPosition(IntPtr window)
+    private static bool NotifiesByPosition(IntPtr menu)
     {
         var info = new MenuInfo { Size = (uint)Marshal.SizeOf<MenuInfo>(), Mask = MimStyle };
-        return GetMenuInfo(GetMenu(window), ref info) && (info.Style & MnsNotifyByPos) != 0;
+        return GetMenuInfo(menu, ref info) && (info.Style & MnsNotifyByPos) != 0;
     }
 
     // The letter after a single '&' ("&&" is an ampersand, not a mnemonic): "Tools && Options (&O)" -> 'o'.

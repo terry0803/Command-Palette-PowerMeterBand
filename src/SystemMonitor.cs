@@ -136,7 +136,10 @@ internal sealed class SystemSampler : IDisposable
     private const int CpuFrequency = 2;
     private const int Committed = 3;
     private const int CommitLimit = 4;
-    private const int Cached = 5;
+    private const int StandbyCore = 5;
+    private const int StandbyNormal = 6;
+    private const int StandbyReserve = 7;
+    private const int Modified = 8;
 
     // The built-in band's CPU and memory counters, read together in one query.
     private readonly CounterSet _counters = new(
@@ -145,7 +148,10 @@ internal sealed class SystemSampler : IDisposable
         @"\Processor Information(_Total)\Processor Frequency",
         @"\Memory\Committed Bytes",
         @"\Memory\Commit Limit",
-        @"\Memory\Cache Bytes");
+        @"\Memory\Standby Cache Core Bytes",
+        @"\Memory\Standby Cache Normal Priority Bytes",
+        @"\Memory\Standby Cache Reserve Bytes",
+        @"\Memory\Modified Page List Bytes");
 
     private readonly GpuUsage _gpu = new();
 
@@ -153,6 +159,14 @@ internal sealed class SystemSampler : IDisposable
     // can come up after this extension does.
     private RetryingCounter? _temperature;
     private long _nextZoneLookup;
+
+    // "已快取" as Task Manager counts it: the standby list (all priorities) plus the modified list, not
+    // \Memory\Cache Bytes (only the file cache's working set, a small part of it).
+    private float? Cached() =>
+        _counters.Value(StandbyCore) is float core && _counters.Value(StandbyNormal) is float normal
+        && _counters.Value(StandbyReserve) is float reserve && _counters.Value(Modified) is float modified
+            ? core + normal + reserve + modified
+            : null;
 
     public ChartHistory CpuChart { get; } = new();
 
@@ -183,7 +197,7 @@ internal sealed class SystemSampler : IDisposable
             used,
             _counters.Value(Committed),
             _counters.Value(CommitLimit),
-            _counters.Value(Cached));
+            Cached());
 
         CpuChart.Add(snapshot.CpuPercent);
         GpuChart.Add(snapshot.GpuPercent);
@@ -446,8 +460,11 @@ internal sealed class CounterSet(params string[] englishPaths) : IDisposable
 {
     private const uint Format = 0x200 | 0x8000; // PDH_FMT_DOUBLE | PDH_FMT_NOCAP100
     private const long RetryAfterMs = 30_000;
+    private const long HoldMs = 3_000;
 
     private readonly IntPtr[] _counters = new IntPtr[englishPaths.Length];
+    private readonly float?[] _last = new float?[englishPaths.Length];
+    private readonly long[] _lastAt = new long[englishPaths.Length];
     private IntPtr _query;
     private long _retryAt;
     private long _addMissingAt;
@@ -497,12 +514,22 @@ internal sealed class CounterSet(params string[] englishPaths) : IDisposable
         _collected = true;
     }
 
-    // The value from the last Collect, or null.
-    public float? Value(int index) =>
-        _collected && _counters[index] != IntPtr.Zero
-        && PdhGetFormattedCounterValue(_counters[index], Format, out _, out var value) == 0 && value.Status <= 1 // valid or new data
-            ? (float)value.Value
-            : null;
+    // The value from the last Collect, or null. Windows now and then rejects a single sample (a rate whose
+    // time base went backwards, around sleep or clock changes); for up to HoldMs the last good value stands
+    // in, so the Dock doesn't flash "--" for one second.
+    public float? Value(int index)
+    {
+        var now = Environment.TickCount64;
+        if (_collected && _counters[index] != IntPtr.Zero
+            && PdhGetFormattedCounterValue(_counters[index], Format, out _, out var value) == 0 && value.Status <= 1) // valid or new data
+        {
+            _last[index] = (float)value.Value;
+            _lastAt[index] = now;
+            return _last[index];
+        }
+
+        return _last[index] is float last && now - _lastAt[index] <= HoldMs ? last : null;
+    }
 
     private void Close()
     {

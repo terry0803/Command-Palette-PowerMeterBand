@@ -110,6 +110,11 @@ internal sealed partial class ClockPage : ContentPage
     private readonly FormContent _form = new() { TemplateJson = Template };
     private string _region = Region();
     private int _lastMinute = -1;
+    private DateTime _day;
+    private string _date = string.Empty;
+    private string _lunar = string.Empty;
+    private string _week = string.Empty;
+    private string _dayOfYear = string.Empty;
 
     public ClockPage()
     {
@@ -137,16 +142,26 @@ internal sealed partial class ClockPage : ContentPage
             _region = Region();
         }
 
+        // What depends only on the date is worked out once a day.
         var zh = ClockBand.Chinese;
+        if (now.Date != _day)
+        {
+            _day = now.Date;
+            var daysInYear = DateTime.IsLeapYear(now.Year) ? 366 : 365;
+            _date = now.ToString("yyyy年M月d日 dddd", zh);
+            _lunar = LunarDate(now);
+            _week = $"第 {ISOWeek.GetWeekOfYear(now)} 週";
+            _dayOfYear = $"第 {now.DayOfYear} 天，還剩 {daysInYear - now.DayOfYear} 天";
+        }
+
         var zone = TimeZoneInfo.Local;
-        var daysInYear = DateTime.IsLeapYear(now.Year) ? 366 : 365;
         _form.DataJson = new JsonObject
         {
             ["time"] = now.ToString("tt h:mm:ss", zh),
-            ["date"] = now.ToString("yyyy年M月d日 dddd", zh),
-            ["lunar"] = LunarDate(now),
-            ["week"] = $"第 {ISOWeek.GetWeekOfYear(now)} 週",
-            ["dayOfYear"] = $"第 {now.DayOfYear} 天，還剩 {daysInYear - now.DayOfYear} 天",
+            ["date"] = _date,
+            ["lunar"] = _lunar,
+            ["week"] = _week,
+            ["dayOfYear"] = _dayOfYear,
             ["timeZone"] = zone.IsDaylightSavingTime(now) ? zone.DaylightName : zone.DisplayName,
             ["region"] = _region,
             ["time24"] = now.ToString("HH:mm:ss", CultureInfo.InvariantCulture),

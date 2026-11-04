@@ -275,6 +275,9 @@ internal sealed class ForegroundAppTracker : IDisposable
     private readonly Dictionary<uint, (string Path, string Name)> _names = [];
     private uint _threadId;
 
+    // Set once the tracker thread has a message queue, so Dispose's WM_QUIT can't be posted too early and lost.
+    private readonly ManualResetEventSlim _ready = new();
+
     // Hooks on the current app's process; see WatchApp.
     private IntPtr _minimizeHook;
     private IntPtr _closeHook;
@@ -311,6 +314,11 @@ internal sealed class ForegroundAppTracker : IDisposable
     private void Run()
     {
         _threadId = Native.GetCurrentThreadId();
+
+        // A thread gets its message queue on its first message call; make it now, then let Dispose post to it.
+        Native.PeekMessage(out _, IntPtr.Zero, 0, 0, 0 /* PM_NOREMOVE */);
+        _ready.Set();
+
         var hook = Native.SetWinEventHook(
             Native.EventSystemForeground, Native.EventSystemForeground, IntPtr.Zero, _onWinEvent, 0, 0,
             Native.WinEventOutOfContext | Native.WinEventSkipOwnProcess);
@@ -490,7 +498,9 @@ internal sealed class ForegroundAppTracker : IDisposable
                 app = Describe(window, _names);
             }
 
-            var currentOnScreen = !Current.IsDesktop && Native.IsWindowVisible(Current.Window) && !Native.IsIconic(Current.Window);
+            // Cloaked counts as off screen: that's a window left on another virtual desktop.
+            var currentOnScreen = !Current.IsDesktop && Native.IsWindowVisible(Current.Window) && !Native.IsIconic(Current.Window)
+                && !Native.IsCloaked(Current.Window);
 
             // Closed, or hidden away (an app that keeps running in the tray): not just minimized.
             var currentGone = !Current.IsDesktop && (!Native.IsWindow(Current.Window) || !Native.IsWindowVisible(Current.Window));
@@ -684,7 +694,14 @@ internal sealed class ForegroundAppTracker : IDisposable
         }
     }
 
-    public void Dispose() => Native.PostThreadMessage(_threadId, Native.WmQuit, IntPtr.Zero, IntPtr.Zero);
+    // Waits (briefly) for the thread to be ready, so disposing right after creating still stops it.
+    public void Dispose()
+    {
+        if (_ready.Wait(2000))
+        {
+            Native.PostThreadMessage(_threadId, Native.WmQuit, IntPtr.Zero, IntPtr.Zero);
+        }
+    }
 }
 
 internal static partial class Native
@@ -728,6 +745,9 @@ internal static partial class Native
 
     [DllImport("user32.dll")]
     public static extern IntPtr DispatchMessage(ref Msg msg);
+
+    // The window at the top of a window's owner chain (a dialog's main window), or the window itself.
+    public static IntPtr RootOwner(IntPtr window) => GetAncestor(window, 3 /* GA_ROOTOWNER */);
 
     [DllImport("user32.dll")]
     public static extern bool PostThreadMessage(uint threadId, uint msg, IntPtr wParam, IntPtr lParam);

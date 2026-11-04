@@ -182,20 +182,48 @@ internal static class Keys
             Thread.Sleep(150);
         }
 
-        // Focus can move during that wait; a paste must never land in some other window.
+        // Injected keys add to whatever the user still holds (Shift left down would turn Ctrl+C into
+        // Ctrl+Shift+C), so wait for modifiers to be let go, and give up if they aren't.
+        if (!ModifiersReleased())
+        {
+            return;
+        }
+
+        // Focus can move during those waits; a paste must never land in some other window.
         if (HasForeground(app))
         {
             Press(chord);
         }
     }
 
-    // The app's own process, or the Store frame that still holds it. A matching window handle alone
-    // isn't enough: Windows reuses the handles of closed windows.
+    private static readonly ushort[] Modifiers = [Shift, Control, Alt, LeftWindows, 0x5C /* right Windows */];
+
+    private static bool ModifiersReleased()
+    {
+        for (var waited = 0; waited <= 1000; waited += 20)
+        {
+            if (!Modifiers.Any(key => (GetAsyncKeyState(key) & 0x8000) != 0))
+            {
+                return true;
+            }
+
+            Thread.Sleep(20);
+        }
+
+        return false;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int key);
+
+    // The app's own window (or one of its dialogs), or the Store frame that still holds the app. Both the
+    // process and the window must match: Windows reuses the handles of closed windows, and another window
+    // of the same app (a second document, another Explorer window) isn't the one the menu was opened for.
     private static bool HasForeground(ActiveApp app)
     {
         var foreground = Native.GetForegroundWindow();
         Native.GetWindowThreadProcessId(foreground, out var pid);
-        return pid == app.ProcessId
+        return (pid == app.ProcessId && Native.RootOwner(foreground) == Native.RootOwner(app.Window))
             || (foreground == app.Window && Native.ChildProcessOf(foreground, pid) == app.ProcessId);
     }
 
