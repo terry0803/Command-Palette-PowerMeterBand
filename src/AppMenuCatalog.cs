@@ -109,7 +109,7 @@ internal static class AppMenuCatalog
                 Key("詳細資料窗格", "Alt+Shift+P", 0xE946, Alt, Shift, 'P'),
                 Key("重新整理", "F5", 0xE72C, F5),
             ]),
-            ("導覽",
+            ("移動",
             [
                 Key("上一頁", "Alt+←", 0xE72B, Alt, Left),
                 Key("下一頁", "Alt+→", 0xE72A, Alt, Right),
@@ -145,7 +145,7 @@ internal static class AppMenuCatalog
                 Key("放大", "Ctrl+=", 0xE8A3, Ctrl, Plus),
                 Key("縮小", "Ctrl+-", 0xE71F, Ctrl, Minus),
             ]),
-            ("導覽",
+            ("移動",
             [
                 Key("前往檔案⋯", "Ctrl+P", 0xE8A5, Ctrl, 'P'),
                 Key("前往行⋯", "Ctrl+G", 0xE8D2, Ctrl, 'G'),
@@ -221,7 +221,7 @@ internal static class AppMenuCatalog
         // Discord's Ctrl+P opens pinned messages, so it gets its own 檔案 menu.
         new("discord", ["discord.exe"],
         [
-            ("導覽",
+            ("移動",
             [
                 Key("快速切換⋯", "Ctrl+K", 0xE721, Ctrl, 'K'),
                 Key("上一個頻道", "Alt+↑", 0xE74A, Alt, Up),
@@ -249,7 +249,7 @@ internal static class AppMenuCatalog
                 Key("全頁檢視", "F11", 0xE740, F11),
                 Key("停駐到桌面", "Ctrl+Alt+D", 0xE8A0, Ctrl, Alt, 'D'),
             ]),
-            ("導覽",
+            ("移動",
             [
                 Key("搜尋所有筆記本", "Ctrl+E", 0xE721, Ctrl, 'E'),
                 Key("上一頁", "Ctrl+PgUp", 0xE74A, Ctrl, PageUp),
@@ -383,7 +383,7 @@ internal static class AppMenuCatalog
                 Key("切換閱讀或編輯", "Ctrl+E", 0xE70F, Ctrl, 'E'),
                 Key("關聯圖", "Ctrl+G", 0xE8A9, Ctrl, 'G'),
             ]),
-            ("導覽",
+            ("移動",
             [
                 Key("全庫搜尋", "Ctrl+Shift+F", 0xE721, Ctrl, Shift, 'F'),
                 Key("上一頁", "Ctrl+Alt+←", 0xE72B, Ctrl, Alt, Left),
@@ -440,7 +440,7 @@ internal static class AppMenuCatalog
         // so 檔案 is LINE's own and says exactly that.
         new("line", ["line.exe"],
         [
-            ("導覽",
+            ("移動",
             [
                 Key("好友", "Ctrl+1", 0xE77B, Ctrl, '1'),
                 Key("聊天", "Ctrl+2", 0xE8BD, Ctrl, '2'),
@@ -481,7 +481,7 @@ internal static class AppMenuCatalog
         // Teams: Ctrl+S in an event form sends the invitation, so 檔案 sticks to a new chat.
         new("teams", ["ms-teams.exe"],
         [
-            ("導覽",
+            ("移動",
             [
                 Key("搜尋", "Ctrl+E", 0xE721, Ctrl, 'E'),
                 Key("跳至聊天或頻道⋯", "Ctrl+G", 0xE8BD, Ctrl, 'G'),
@@ -594,7 +594,7 @@ internal static class AppMenuCatalog
                 Key("實際大小", "Ctrl+0", 0xE71E, Ctrl, '0'),
                 Key("全螢幕", "F11", 0xE740, F11),
             ]),
-            ("導覽",
+            ("移動",
             [
                 Key("上一頁", "Alt+←", 0xE72B, Alt, Left),
                 Key("下一頁", "Alt+→", 0xE72A, Alt, Right),
@@ -628,7 +628,7 @@ internal static class AppMenuCatalog
                 Key("實際大小", "Ctrl+0", 0xE71E, Ctrl, '0'),
                 Key("全螢幕", "F11", 0xE740, F11),
             ]),
-            ("導覽",
+            ("移動",
             [
                 Key("上一頁", "Ctrl+[", 0xE72B, Ctrl, BracketLeft),
                 Key("下一頁", "Ctrl+]", 0xE72A, Ctrl, BracketRight),
@@ -705,7 +705,7 @@ internal static class AppMenuCatalog
         // Phone Link: Ctrl+P starts mirroring the phone's screen.
         new("phonelink", ["phoneexperiencehost.exe"],
         [
-            ("導覽",
+            ("移動",
             [
                 Key("訊息", "Ctrl+1", 0xE8BD, Ctrl, '1'),
                 Key("相片", "Ctrl+2", 0xE91B, Ctrl, '2'),
@@ -757,7 +757,7 @@ internal static class AppMenuCatalog
         // opens the Store's own links instead.
         new("store", ["winstore.app.exe"],
         [
-            ("導覽",
+            ("移動",
             [
                 Link("首頁", "ms-windows-store://home", 0xE80F),
                 Link("媒體櫃與更新", "ms-windows-store://downloadsandupdates", 0xE896),
@@ -879,7 +879,7 @@ internal static class AppMenuCatalog
         // PowerToys Settings and Samsung Multi Control also go back a page with Alt+←.
         new("settingsback", ["powertoys.settings.exe", "multicontrolwinui.exe"],
         [
-            ("導覽", [Key("上一頁", "Alt+←", 0xE72B, Alt, Left)]),
+            ("移動", [Key("上一頁", "Alt+←", 0xE72B, Alt, Left)]),
         ],
         FileMenu: [CloseWindow()]),
 
@@ -954,7 +954,7 @@ internal static class AppMenuCatalog
             Key("標為已讀", "Ctrl+Q", 0xE8C3, Ctrl, 'Q'),
             Key("標為未讀", "Ctrl+U", 0xE715, Ctrl, 'U'),
         ]),
-        ("導覽",
+        ("移動",
         [
             Key("郵件", "Ctrl+1", 0xE715, Ctrl, '1'),
             Key("行事曆", "Ctrl+2", 0xE787, Ctrl, '2'),
