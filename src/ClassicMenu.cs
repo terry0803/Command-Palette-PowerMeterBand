@@ -38,7 +38,9 @@ internal static partial class ClassicMenu
         var menu = GetMenu(window);
         for (var i = 0; menu != IntPtr.Zero && i < GetMenuItemCount(menu); i++)
         {
-            titles.Add(Label(Text(menu, i)).Title);
+            // A title the program draws itself has no text: a blank label would be invisible on the Dock.
+            var title = Label(Text(menu, i)).Title;
+            titles.Add(title.Length > 0 ? title : $"選單 {i + 1}");
         }
 
         return titles;
@@ -50,21 +52,29 @@ internal static partial class ClassicMenu
     {
         // Without a letter (a title like "File" with no '&'), Windows can only activate the menu bar
         // itself, not open that menu, so say so rather than promise this one.
-        var mnemonic = Mnemonic(Text(GetMenu(window), topLevelIndex));
+        var text = Text(GetMenu(window), topLevelIndex);
+        var mnemonic = Mnemonic(text);
         var title = mnemonic == '\0' ? "在程式裡打開選單列" : "在程式裡打開這個選單";
         if (mnemonic == '\0')
         {
             why += "；這個選單沒有快速鍵字母，只能先選取選單列";
         }
 
+        // Still the same window, usable, with the same menu at that place (so the letter still opens it).
+        bool Unchanged() => Native.OwnerOf(window) == owner && IsWindowEnabled(window) && Text(GetMenu(window), topLevelIndex) == text;
+
         return
         [
             new ListItem(DockCommands.AfterDismiss(() =>
             {
-                if (Native.OwnerOf(window) == owner && IsWindowEnabled(window))
+                // Checked again once in front: coming forward can open a dialog or change the menus.
+                if (Unchanged())
                 {
                     AppWindows.Activate(window);
-                    PostMessage(window, WmSysCommand, (IntPtr)ScKeyMenu, (IntPtr)mnemonic);
+                    if (Unchanged())
+                    {
+                        PostMessage(window, WmSysCommand, (IntPtr)ScKeyMenu, (IntPtr)mnemonic);
+                    }
                 }
             }))
             {
@@ -202,19 +212,18 @@ internal static partial class ClassicMenu
     private static ICommand Choose(IntPtr window, uint owner, int[] path, int position, uint id, string title) =>
         DockCommands.AfterDismiss(() =>
         {
-            if (Native.OwnerOf(window) != owner)
+            if (Native.OwnerOf(window) != owner || Current(window, path, position, id, title) is null)
             {
                 return;
             }
 
-            var menu = OpenMenuAt(window, path, out var enabled);
-            if (!enabled || Info(menu, position) is not { } info || info.Id != id || (info.State & MfsDisabled) != 0
-                || info.SubMenu != IntPtr.Zero || (info.Type & MftSeparator) != 0 || Label(Text(menu, position)).Title != title)
-            {
-                return;
-            }
-
+            // Coming to the front can change things (the program grays items out, rebuilds its menus or
+            // opens a dialog as it's activated), so look once more before choosing.
             AppWindows.Activate(window);
+            if (Native.OwnerOf(window) != owner || Current(window, path, position, id, title) is not { } menu)
+            {
+                return;
+            }
 
             // MNS_NOTIFYBYPOS on the menu bar or on the item's own menu reports the choice by position,
             // with WM_MENUCOMMAND (Windows checks both, as Wine's reimplementation does).
@@ -227,6 +236,15 @@ internal static partial class ClassicMenu
                 PostMessage(window, WmCommand, (IntPtr)id, IntPtr.Zero);
             }
         });
+
+    // The menu holding the item, if the item at that place is still the one that was listed and can run.
+    private static IntPtr? Current(IntPtr window, int[] path, int position, uint id, string title)
+    {
+        var menu = OpenMenuAt(window, path, out var enabled);
+        return !enabled || Info(menu, position) is not { } info || info.Id != id || (info.State & MfsDisabled) != 0
+            || info.SubMenu != IntPtr.Zero || (info.Type & MftSeparator) != 0 || Label(Text(menu, position)).Title != title
+            ? null : menu;
+    }
 
     private static bool NotifiesByPosition(IntPtr menu)
     {

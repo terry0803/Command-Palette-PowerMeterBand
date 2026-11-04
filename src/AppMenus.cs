@@ -8,7 +8,14 @@ namespace PowerMeterBand;
 /// One menu item that acts on the current app.
 /// </summary>
 /// <param name="SkipFor">Apps (exe names) where the shortcut means something else, so the item is left out.</param>
-internal sealed record MenuEntry(string Title, string Shortcut, int Glyph, Action<ActiveApp> Run, string Section = "", params string[] SkipFor);
+internal sealed record MenuEntry(string Title, string Shortcut, int Glyph, Action<ActiveApp> Run, string Section = "", params string[] SkipFor)
+{
+    // For apps whose shortcuts the user can change (VS Code, Windows Terminal): the app's own name for the
+    // command, and its default keys in the app's notation (null if it has none by default). See KeyBindings.
+    public string? Command { get; init; }
+
+    public string? DefaultKeys { get; init; }
+}
 
 /// <summary>
 /// The 檔案 and 編輯 menus. Windows apps don't publish their menus the way Mac apps do, so these
@@ -19,11 +26,16 @@ internal sealed partial class ShortcutMenuPage : ListPage
 {
     private readonly ForegroundAppTracker _tracker;
     private readonly MenuEntry[] _entries;
+    private readonly Func<ActiveApp, bool> _accepts;
 
-    public ShortcutMenuPage(string id, string title, ForegroundAppTracker tracker, MenuEntry[] entries)
+    // Accepts: whether these entries belong to an app. The Dock can ask a page it showed for one app for
+    // its items again after the app in front has changed; it gets nothing rather than one app's
+    // shortcuts aimed at another.
+    public ShortcutMenuPage(string id, string title, ForegroundAppTracker tracker, MenuEntry[] entries, Func<ActiveApp, bool> accepts)
     {
         _tracker = tracker;
         _entries = entries;
+        _accepts = accepts;
         Id = id;
         Name = "開啟";
         Title = title;
@@ -55,19 +67,44 @@ internal sealed partial class ShortcutMenuPage : ListPage
     public override IListItem[] GetItems()
     {
         var app = _tracker.Current;
+        if (!_accepts(app))
+        {
+            return [];
+        }
+
         var exe = AppWindows.ExeName(app);
-        return
-        [
-            .. _entries
-                .Where(entry => !entry.SkipFor.Contains(exe, StringComparer.OrdinalIgnoreCase))
-                .Select(entry => new ListItem(DockCommands.AfterDismiss(() => entry.Run(app)))
+        var items = new List<IListItem>();
+        List<KeyBindings.Binding>? bindings = null; // The user's key settings, read once for the whole menu.
+        foreach (var entry in _entries.Where(entry => !entry.SkipFor.Contains(exe, StringComparer.OrdinalIgnoreCase)))
+        {
+            // Read from the user's own key settings each time the menu opens: an item whose keys were
+            // changed shows (and presses) the new ones, and one with no working keys left is hidden.
+            var (shortcut, run) = (entry.Shortcut, entry.Run);
+            if (entry.Command is string command)
+            {
+                bindings ??= KeyBindings.UserBindings(app);
+                if (KeyBindings.Resolve(bindings, command, entry.DefaultKeys) is not { } keys)
                 {
-                    Title = entry.Title,
-                    Subtitle = entry.Shortcut,
-                    Icon = Glyphs.Of(entry.Glyph),
-                    Section = entry.Section,
-                }),
-        ];
+                    continue;
+                }
+
+                if (keys.Text != entry.DefaultKeys)
+                {
+                    shortcut = keys.Display;
+                    run = target => Keys.SendTo(target, keys.Chords);
+                }
+            }
+
+            items.Add(new ListItem(DockCommands.AfterDismiss(() => run(app)))
+            {
+                Title = entry.Title,
+                Subtitle = shortcut,
+                Icon = Glyphs.Of(entry.Glyph),
+                Section = entry.Section,
+            });
+        }
+
+        return [.. items];
     }
 
     public void Refresh() => RaiseItemsChanged();
@@ -157,10 +194,15 @@ internal static class Keys
 
     // The palette has just closed, so bring the app back first. Keys always go to whatever has
     // the foreground, so if the app doesn't get it, press nothing rather than hit another window.
-    public static void SendTo(ActiveApp app, params ushort[] chord) => SendTo(app, null, chord);
+    public static void SendTo(ActiveApp app, params ushort[] chord) => SendTo(app, null, [chord]);
+
+    public static void SendTo(ActiveApp app, Func<bool>? when, params ushort[] chord) => SendTo(app, when, [chord]);
+
+    // Chords pressed one after another (VS Code's "Ctrl+K Ctrl+S").
+    public static void SendTo(ActiveApp app, ushort[][] chords) => SendTo(app, null, chords);
 
     // When: checked just before pressing, once the app is in front (e.g. that the right control has the focus).
-    public static void SendTo(ActiveApp app, Func<bool>? when, params ushort[] chord)
+    public static void SendTo(ActiveApp app, Func<bool>? when, ushort[][] chords)
     {
         // Injected keys add to whatever the user still holds (Shift left down would turn Ctrl+C into
         // Ctrl+Shift+C, and Shift with the Alt tap that activating may need can switch the input
@@ -202,20 +244,39 @@ internal static class Keys
         // Focus can move during those waits; a paste must never land in some other window.
         if (HasForeground(app) && (when is null || when()))
         {
-            Press(chord);
+            for (var i = 0; i < chords.Length; i++)
+            {
+                // Between the parts of a sequence, focus may have moved (also while waiting for keys to be
+                // let go): the rest must not go elsewhere, so the window is checked after that wait.
+                if (i > 0)
+                {
+                    Thread.Sleep(30);
+                    if (!ModifiersReleased() || !HasForeground(app) || (when is not null && !when()))
+                    {
+                        return;
+                    }
+                }
+
+                Press(chords[i]);
+            }
         }
     }
 
     // Whether the keyboard focus is in a list view (any toolkit's wrapper of the common control) whose window's
-    // title starts with mainTitle: the app's main window, not a dialog or another window of it with a list
+    // title starts with one of mainTitles: the app's main window, not a dialog or another window of it with a list
     // of its own, nor a text box.
-    public static bool FocusIsListIn(string mainTitle)
+    public static bool FocusIsListIn(params string[] mainTitles)
     {
         var info = new GuiThreadInfo { Size = Marshal.SizeOf<GuiThreadInfo>() };
         var thread = Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out _);
-        return GetGUIThreadInfo(thread, ref info) && info.Focus != IntPtr.Zero
-            && Native.ClassName(info.Focus).Contains("SysListView32", StringComparison.Ordinal)
-            && Native.WindowText(Native.RootOf(info.Focus)).StartsWith(mainTitle, StringComparison.Ordinal);
+        if (!GetGUIThreadInfo(thread, ref info) || info.Focus == IntPtr.Zero
+            || !Native.ClassName(info.Focus).Contains("SysListView32", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var title = Native.WindowText(Native.RootOf(info.Focus));
+        return mainTitles.Any(main => title.StartsWith(main, StringComparison.Ordinal));
     }
 
     [DllImport("user32.dll")]

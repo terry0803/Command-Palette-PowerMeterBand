@@ -97,9 +97,26 @@ internal sealed partial class PowerDetailsPage : ContentPage
               ]
             },
             {
+              "type": "ColumnSet",
+              "spacing": "large",
+              "columns": [
+                { "type": "Column", "items": [ { "type": "TextBlock", "text": "過去 6 小時的整機功率", "size": "small", "isSubtle": true } ] },
+                { "type": "Column", "width": "auto", "items": [ { "type": "TextBlock", "text": "虛線 ${historyTop}", "size": "small", "isSubtle": true, "horizontalAlignment": "right" } ] }
+              ]
+            },
+            { "type": "Image", "url": "${historyChart}", "width": "400px", "height": "80px", "spacing": "small" },
+            {
+              "type": "ColumnSet",
+              "spacing": "small",
+              "columns": [
+                { "type": "Column", "items": [ { "type": "TextBlock", "text": "平均 ${historyAverage}", "size": "small" } ] },
+                { "type": "Column", "width": "auto", "items": [ { "type": "TextBlock", "text": "最高 ${historyPeak}", "size": "small", "horizontalAlignment": "right" } ] }
+              ]
+            },
+            {
               "type": "TextBlock",
               "spacing": "extraLarge",
-              "text": "整機功率來自 ACPI Power Meter，只在使用電池時有數值；CPU、GPU 功率來自 Intel RAPL。每秒更新。",
+              "text": "整機功率來自 ACPI Power Meter，只在使用電池時有數值；CPU、GPU 功率來自 Intel RAPL。每秒更新。圖表是每 5 分鐘的平均，插電或睡眠時沒有紀錄。",
               "size": "small",
               "isSubtle": true,
               "wrap": true
@@ -109,6 +126,7 @@ internal sealed partial class PowerDetailsPage : ContentPage
         """;
 
     private readonly FormContent _form = new() { TemplateJson = Template };
+    private readonly PowerHistory _history = new();
 
     public PowerDetailsPage()
     {
@@ -130,12 +148,18 @@ internal sealed partial class PowerDetailsPage : ContentPage
 
     public void Update(PowerSnapshot s)
     {
+        _history.Add(s.SystemWatts);
+        var (chart, top, average, peak) = _history.Describe();
         var data = new JsonObject
         {
             ["systemPower"] = s.SystemWatts is null && s.PluggedIn == true ? "插電時無法量測" : FormatWatts(s.SystemWatts),
             ["cpuPower"] = FormatWatts(s.CpuWatts),
             ["gpuPower"] = FormatWatts(s.GpuWatts),
             ["pluggedInDisplay"] = DisplaySettings.Describe(DisplaySettings.PluggedIn),
+            ["historyChart"] = chart,
+            ["historyTop"] = $"{top} W",
+            ["historyAverage"] = average,
+            ["historyPeak"] = peak,
             ["status"] = s.BatteryStatus switch
             {
                 BatteryStatus.Charging => "充電中",

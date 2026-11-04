@@ -135,26 +135,44 @@ internal static class AppMenuCatalog
         [
             ("檢視",
             [
-                Key("命令選擇區", "Ctrl+Shift+P", 0xE756, Ctrl, Shift, 'P'),
-                Key("檔案總管", "Ctrl+Shift+E", 0xEC50, Ctrl, Shift, 'E'),
-                Key("搜尋", "Ctrl+Shift+F", 0xE721, Ctrl, Shift, 'F'),
-                Key("原始檔控制", "Ctrl+Shift+G", 0xE8D4, Ctrl, Shift, 'G'),
-                Key("延伸模組", "Ctrl+Shift+X", 0xEA86, Ctrl, Shift, 'X'),
-                Key("顯示或隱藏側邊欄", "Ctrl+B", 0xE8A0, Ctrl, 'B'),
-                Key("顯示或隱藏終端機", "Ctrl+`", 0xE756, Ctrl, Backtick),
-                Key("全螢幕", "F11", 0xE740, F11),
-                Key("放大", "Ctrl+=", 0xE8A3, Ctrl, Plus),
-                Key("縮小", "Ctrl+-", 0xE71F, Ctrl, Minus),
+                Bound("workbench.action.showCommands", "命令選擇區", "ctrl+shift+p", 0xE756),
+                Bound("workbench.view.explorer", "檔案總管", "ctrl+shift+e", 0xEC50),
+                Bound("workbench.action.findInFiles", "搜尋", "ctrl+shift+f", 0xE721),
+                Bound("workbench.view.scm", "原始檔控制", "ctrl+shift+g", 0xE8D4),
+                Bound("workbench.view.extensions", "延伸模組", "ctrl+shift+x", 0xEA86),
+                Bound("workbench.action.toggleSidebarVisibility", "顯示或隱藏側邊欄", "ctrl+b", 0xE8A0),
+                Bound("workbench.action.terminal.toggleTerminal", "顯示或隱藏終端機", "ctrl+`", 0xE756),
+                Bound("workbench.action.toggleFullScreen", "全螢幕", "f11", 0xE740),
+                Bound("workbench.action.zoomIn", "放大", "ctrl+=", 0xE8A3),
+                Bound("workbench.action.zoomOut", "縮小", "ctrl+-", 0xE71F),
             ]),
             ("移動",
             [
-                Key("前往檔案⋯", "Ctrl+P", 0xE8A5, Ctrl, 'P'),
-                Key("前往行⋯", "Ctrl+G", 0xE8D2, Ctrl, 'G'),
-                Key("前往符號⋯", "Ctrl+Shift+O", 0xE943, Ctrl, Shift, 'O'),
-                Key("前往定義", "F12", 0xE8AD, F12),
-                Key("上一個位置", "Alt+←", 0xE72B, Alt, Left),
-                Key("下一個位置", "Alt+→", 0xE72A, Alt, Right),
+                Bound("workbench.action.quickOpen", "前往檔案⋯", "ctrl+p", 0xE8A5),
+                Bound("workbench.action.gotoLine", "前往行⋯", "ctrl+g", 0xE8D2),
+                Bound("workbench.action.gotoSymbol", "前往符號⋯", "ctrl+shift+o", 0xE943),
+                Bound("editor.action.revealDefinition", "前往定義", "f12", 0xE8AD),
+                Bound("workbench.action.navigateBack", "上一個位置", "alt+left", 0xE72B),
+                Bound("workbench.action.navigateForward", "下一個位置", "alt+right", 0xE72A),
             ]),
+        ],
+        // Its own 檔案 and 編輯, so these follow the user's key settings too (no 列印: Ctrl+P is Go to File).
+        FileMenu:
+        [
+            Bound("workbench.action.files.newUntitledFile", "新增", "ctrl+n", 0xE710),
+            Bound("workbench.action.files.openFile", "開啟舊檔⋯", "ctrl+o", 0xE8E5),
+            Bound("workbench.action.files.save", "儲存", "ctrl+s", 0xE74E),
+            CloseWindow(),
+        ],
+        EditMenu:
+        [
+            Bound("undo", "復原", "ctrl+z", 0xE7A7),
+            Bound("editor.action.clipboardCutAction", "剪下", "ctrl+x", 0xE8C6),
+            Bound("editor.action.clipboardCopyAction", "複製", "ctrl+c", 0xE8C8),
+            Bound("editor.action.clipboardPasteAction", "貼上", "ctrl+v", 0xE77F),
+            Bound("editor.action.selectAll", "全選", "ctrl+a", 0xE8B3),
+            Bound("actions.find", "尋找⋯", "ctrl+f", 0xE721),
+            .. ShortcutMenuPage.EditMenu.Where(entry => entry.Section == "系統"),
         ]),
 
         new("word", ["winword.exe"],
@@ -296,27 +314,27 @@ internal static class AppMenuCatalog
         [
             ("檢視",
             [
-                Key("命令選擇區", "Ctrl+Shift+P", 0xE756, Ctrl, Shift, 'P'),
-                Key("設定", "Ctrl+,", 0xE713, Ctrl, Comma),
-                Key("放大字型", "Ctrl+=", 0xE8A3, Ctrl, Plus),
-                Key("縮小字型", "Ctrl+-", 0xE71F, Ctrl, Minus),
-                Key("重設字型大小", "Ctrl+0", 0xE71E, Ctrl, '0'),
-                Key("全螢幕", "F11", 0xE740, F11),
+                Bound("Terminal.ToggleCommandPalette", "命令選擇區", "ctrl+shift+p", 0xE756),
+                Bound("Terminal.OpenSettingsUI", "設定", "ctrl+,", 0xE713),
+                Bound("Terminal.IncreaseFontSize", "放大字型", "ctrl+plus", 0xE8A3),
+                Bound("Terminal.DecreaseFontSize", "縮小字型", "ctrl+minus", 0xE71F),
+                Bound("Terminal.ResetFontSize", "重設字型大小", "ctrl+0", 0xE71E),
+                Bound("Terminal.ToggleFullscreen", "全螢幕", "f11", 0xE740),
             ]),
         ],
         FileMenu:
         [
-            Key("新索引標籤", "Ctrl+Shift+T", 0xE710, Ctrl, Shift, 'T'),
-            Key("新視窗", "Ctrl+Shift+N", 0xE78B, Ctrl, Shift, 'N'),
-            Key("分割窗格", "Alt+Shift+D", 0xE8A9, Alt, Shift, 'D'),
+            Bound("Terminal.OpenNewTab", "新索引標籤", "ctrl+shift+t", 0xE710),
+            Bound("Terminal.OpenNewWindow", "新視窗", "ctrl+shift+n", 0xE78B),
+            Bound("Terminal.DuplicatePaneAuto", "分割窗格", null, 0xE8A9), // No default keys: shown only if the user gave it some.
             CloseWindow(),
         ],
         EditMenu:
         [
-            Key("複製", "Ctrl+Shift+C", 0xE8C8, Ctrl, Shift, 'C'),
-            Key("貼上", "Ctrl+Shift+V", 0xE77F, Ctrl, Shift, 'V'),
-            Key("全選", "Ctrl+Shift+A", 0xE8B3, Ctrl, Shift, 'A'),
-            Key("尋找⋯", "Ctrl+Shift+F", 0xE721, Ctrl, Shift, 'F'),
+            Bound("Terminal.CopyToClipboard", "複製", "ctrl+shift+c", 0xE8C8),
+            Bound("Terminal.PasteFromClipboard", "貼上", "ctrl+shift+v", 0xE77F),
+            Bound("Terminal.SelectAll", "全選", "ctrl+shift+a", 0xE8B3),
+            Bound("Terminal.FindText", "尋找⋯", "ctrl+shift+f", 0xE721),
         ]),
 
         // GitHub Desktop's Ctrl+P pushes, so it gets its own 檔案 menu.
@@ -971,11 +989,29 @@ internal static class AppMenuCatalog
     private static MenuEntry Key(string title, string shortcut, int glyph, params ushort[] chord) =>
         new(title, shortcut, glyph, app => Keys.SendTo(app, chord));
 
+    // A command of an app whose shortcuts the user can change, with its default keys in that app's notation
+    // (null if it has none). The menu shows and presses whatever the user's settings make of it (KeyBindings).
+    private static MenuEntry Bound(string command, string title, string? keys, int glyph)
+    {
+        var parsed = keys is null ? null : KeyBindings.Parse(keys);
+        return new(title, parsed?.Display ?? string.Empty, glyph, app =>
+        {
+            if (parsed is not null)
+            {
+                Keys.SendTo(app, parsed.Chords);
+            }
+        })
+        {
+            Command = command,
+            DefaultKeys = parsed?.Text,
+        };
+    }
+
     // A key Bulk Crap Uninstaller takes only while the app list in its main window has the focus; not sent
-    // otherwise. Its main window's title always starts with the program's name (translations keep it), and
-    // its other windows (leftover removal, for one) have lists of their own.
+    // otherwise. Its main window's title starts with the program's name (every translation keeps the English
+    // one except Arabic, which has its own), and its other windows (leftover removal, for one) have lists too.
     private static MenuEntry ListKey(string title, string shortcut, int glyph, params ushort[] chord) =>
-        new(title, shortcut, glyph, app => Keys.SendTo(app, () => Keys.FocusIsListIn("Bulk Crap Uninstaller"), chord));
+        new(title, shortcut, glyph, app => Keys.SendTo(app, () => Keys.FocusIsListIn("Bulk Crap Uninstaller", "حماقة  سائبة الغاء التثبيت"), chord));
 
     // Opens the folder in a new window; typing into the current window's address bar is too fragile.
     private static MenuEntry Folder(string title, string path, int glyph) =>

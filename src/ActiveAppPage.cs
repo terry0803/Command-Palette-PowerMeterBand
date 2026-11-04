@@ -216,6 +216,9 @@ internal static class AppUsage
             return new(cpu, 0, Stopwatch.GetTimestamp(), takenAt);
         }
 
+        // This copy of the app: its own process and the ones it started (a browser's tabs, an Electron app's
+        // helpers), not another copy started separately (Excel with /x), whose windows aren't counted either.
+        var family = Descendants(app.ProcessId);
         var bytes = 0L;
         foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(path)))
         {
@@ -223,7 +226,7 @@ internal static class AppUsage
             {
                 // Same program, in this sign-in session only: another signed-in user's copy isn't this app.
                 if (process.Id != app.ProcessId
-                    && (SessionOf(process) != CurrentSession || Native.ProcessPath((uint)process.Id) != path))
+                    && (!family.Contains(process.Id) || SessionOf(process) != CurrentSession || Native.ProcessPath((uint)process.Id) != path))
                 {
                     continue;
                 }
@@ -244,6 +247,123 @@ internal static class AppUsage
         }
 
         return new(cpu, bytes, Stopwatch.GetTimestamp(), takenAt);
+    }
+
+    private static readonly Dictionary<(uint Root, DateTime? Started), HashSet<(int Pid, DateTime? Started)>> KnownMembers = [];
+    private static readonly LinkedList<(uint Root, DateTime? Started)> KnownOrder = new();
+
+    // A process and everything it started, through any depth, from one snapshot of all processes. A parent
+    // ID can be reused after the parent exits, so a child must have started after its parent.
+    private static HashSet<int> Descendants(uint root)
+    {
+        var parents = new Dictionary<int, int>();
+        var snapshot = CreateToolhelp32Snapshot(0x2 /* TH32CS_SNAPPROCESS */, 0);
+        if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1))
+        {
+            return [(int)root];
+        }
+
+        try
+        {
+            var entry = new ProcessEntry { Size = (uint)Marshal.SizeOf<ProcessEntry>() };
+            for (var ok = Process32First(snapshot, ref entry); ok; ok = Process32Next(snapshot, ref entry))
+            {
+                parents[(int)entry.ProcessId] = (int)entry.ParentProcessId;
+            }
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
+
+        var family = new HashSet<int> { (int)root };
+        var started = new Dictionary<int, DateTime?>();
+        DateTime? Started(int pid)
+        {
+            if (!started.TryGetValue(pid, out var time))
+            {
+                started[pid] = time = AppWindows.StartTime((uint)pid);
+            }
+
+            return time;
+        }
+
+        // Members found before stay members while they run (same ID and start time), even once the process
+        // in between that linked them to the app has exited and broken the chain.
+        var key = (root, Started((int)root));
+        lock (KnownMembers)
+        {
+            if (KnownMembers.TryGetValue(key, out var known))
+            {
+                foreach (var (pid, start) in known)
+                {
+                    if (parents.ContainsKey(pid) && Started(pid) == start)
+                    {
+                        family.Add(pid);
+                    }
+                }
+            }
+        }
+
+        // Grow the family until no process joins: one whose parent is in it, and that started after it.
+        for (var grew = true; grew;)
+        {
+            grew = false;
+            foreach (var (pid, parent) in parents)
+            {
+                if (!family.Contains(pid) && family.Contains(parent) && Started(pid) >= Started(parent))
+                {
+                    family.Add(pid);
+                    grew = true;
+                }
+            }
+        }
+
+        lock (KnownMembers)
+        {
+            // The last few apps looked at are remembered (going back to one keeps its family); older ones
+            // and members that have exited are dropped, so this stays small.
+            KnownMembers.Remove(key);
+            KnownMembers[key] = [.. family.Select(pid => (pid, Started(pid)))];
+            KnownOrder.Remove(key);
+            KnownOrder.AddLast(key);
+            while (KnownOrder.Count > 8)
+            {
+                KnownMembers.Remove(KnownOrder.First!.Value);
+                KnownOrder.RemoveFirst();
+            }
+        }
+
+        return family;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool Process32First(IntPtr snapshot, ref ProcessEntry entry);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool Process32Next(IntPtr snapshot, ref ProcessEntry entry);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    // PROCESSENTRY32W.
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ProcessEntry
+    {
+        public uint Size;
+        public uint Usage;
+        public uint ProcessId;
+        public IntPtr DefaultHeapId;
+        public uint ModuleId;
+        public uint Threads;
+        public uint ParentProcessId;
+        public int PriorityClassBase;
+        public uint Flags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string ExeFile;
     }
 
     // The foreground app always runs in the user's own session, the same as the extension.
@@ -488,7 +608,6 @@ internal static partial class Native
     public const uint SwpNoZOrder = 0x4;
     public const uint SwpNoActivate = 0x10;
 
-    private const uint ProcessVmRead = 0x10;
     private const int DwmwaExtendedFrameBounds = 9;
 
     [DllImport("user32.dll")]
@@ -555,7 +674,9 @@ internal static partial class Native
     // "Memory (private working set)", the number Task Manager shows. Null when the process can't be read.
     public static long? PrivateWorkingSet(uint pid)
     {
-        var process = OpenProcess(ProcessQueryLimitedInformation | ProcessVmRead, false, pid);
+        // Since Windows 8.1 GetProcessMemoryInfo needs only limited query rights; asking for VM_READ too fails
+        // on processes that allow just the former, and the figure fell back to the full working set.
+        var process = OpenProcess(ProcessQueryLimitedInformation, false, pid);
         if (process == IntPtr.Zero)
         {
             return null;

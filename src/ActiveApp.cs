@@ -63,8 +63,10 @@ internal sealed partial class ActiveAppBand : WrappedDockItem, IDisposable
         Icon = new IconInfo("\uECAA"); // AppIconDefault, only shown when picking bands
         Page = new ActiveAppPage(_tracker);
         _item = new DockTextListItem(Page, MaxLabelWidthDips);
-        _fileMenu = new ShortcutMenuPage("com.terry.powermeter.activeapp.file", "檔案", _tracker, ShortcutMenuPage.FileMenu);
-        _editMenu = new ShortcutMenuPage("com.terry.powermeter.activeapp.edit", "編輯", _tracker, ShortcutMenuPage.EditMenu);
+        _fileMenu = new ShortcutMenuPage("com.terry.powermeter.activeapp.file", "檔案", _tracker, ShortcutMenuPage.FileMenu,
+            app => UsesShared(app, set => set.FileMenu));
+        _editMenu = new ShortcutMenuPage("com.terry.powermeter.activeapp.edit", "編輯", _tracker, ShortcutMenuPage.EditMenu,
+            app => UsesShared(app, set => set.EditMenu));
         _windowMenu = new WindowMenuPage(_tracker);
 
         // No subtitles on menus: the Dock squeezes one in under the title of every item but the first.
@@ -117,9 +119,7 @@ internal sealed partial class ActiveAppBand : WrappedDockItem, IDisposable
         var unreachable = !app.IsDesktop && (app.IsFrameOnly || (!RunningElevated && Native.IsElevated(app.ProcessId)));
         var classic = app.IsDesktop || unreachable ? [] : ClassicMenu.TopLevel(app.Window);
         var exe = app.IsDesktop ? string.Empty : AppWindows.ExeName(app);
-        var set = classic.Count > 0 || app.IsDesktop || unreachable ? null
-            : Native.ClassName(app.Window) == "ConsoleWindowClass" ? AppMenuCatalog.Console
-            : AppMenuCatalog.For(exe);
+        var set = classic.Count > 0 || app.IsDesktop || unreachable ? null : SetFor(app, exe);
 
         // Only rebuild the Dock's items when the set of menus actually changes.
         var key = app.IsDesktop ? "desktop"
@@ -129,42 +129,49 @@ internal sealed partial class ActiveAppBand : WrappedDockItem, IDisposable
             : "shared";
         if (key != _menuKey)
         {
-            _menuKey = key;
-            _shownMenus.Clear();
+            IListItem[] items;
+            var shown = new List<Action>();
             if (app.IsDesktop || unreachable)
             {
-                Items = [_item]; // Just the name: "桌面" has nothing to edit either.
+                items = [_item]; // Just the name: "桌面" has nothing to edit either.
             }
             else if (classic.Count > 0)
             {
                 // Classic menus are read fresh each time they open.
                 var owner = Native.OwnerOf(app.Window);
                 IListItem[] menus = [.. classic.Select((title, i) => MenuItem(new ClassicMenuPage(app.Window, owner, [i], title), title))];
-                Items = [_item, .. menus, _windowItem];
-                _shownMenus.Add(_windowMenu.Refresh);
+                items = [_item, .. menus, _windowItem];
+                shown.Add(_windowMenu.Refresh);
             }
             else if (set is not null)
             {
                 var (menus, pages) = AppMenusFor(set);
-                Items = [_item, .. menus, _windowItem];
-                _shownMenus.AddRange(pages.Select(page => (Action)page.Refresh));
+                items = [_item, .. menus, _windowItem];
+                shown.AddRange(pages.Select(page => (Action)page.Refresh));
                 if (set.FileMenu is null)
                 {
-                    _shownMenus.Add(_fileMenu.Refresh);
+                    shown.Add(_fileMenu.Refresh);
                 }
 
                 if (set.EditMenu is null)
                 {
-                    _shownMenus.Add(_editMenu.Refresh);
+                    shown.Add(_editMenu.Refresh);
                 }
 
-                _shownMenus.Add(_windowMenu.Refresh);
+                shown.Add(_windowMenu.Refresh);
             }
             else
             {
-                Items = [_item, _fileItem, _editItem, _windowItem];
-                _shownMenus.AddRange([_fileMenu.Refresh, _editMenu.Refresh, _windowMenu.Refresh]);
+                items = [_item, _fileItem, _editItem, _windowItem];
+                shown.AddRange([_fileMenu.Refresh, _editMenu.Refresh, _windowMenu.Refresh]);
             }
+
+            // Recorded only once the Dock has taken the new items: if handing them over fails (the Dock
+            // restarting, say), the next refresh tries again instead of thinking they're already shown.
+            Items = items;
+            _shownMenus.Clear();
+            _shownMenus.AddRange(shown);
+            _menuKey = key;
         }
 
         // Only menus on the Dock right now can be open or about to open; the rest get a refresh when they're back.
@@ -173,6 +180,22 @@ internal sealed partial class ActiveAppBand : WrappedDockItem, IDisposable
         {
             refresh();
         }
+    }
+
+    // The app's menu set, as Refresh picks it (console windows by their class, whatever runs in them).
+    private static AppMenuSet? SetFor(ActiveApp app, string exe) =>
+        Native.ClassName(app.Window) == "ConsoleWindowClass" ? AppMenuCatalog.Console : AppMenuCatalog.For(exe);
+
+    // Whether an app gets the shared 檔案 or 編輯: an ordinary app with no menu bar of its own, whose set
+    // (if it has one) doesn't bring its own version of that menu.
+    private static bool UsesShared(ActiveApp app, Func<AppMenuSet, MenuEntry[]?> menu)
+    {
+        if (app.IsDesktop || app.IsFrameOnly || ClassicMenu.TopLevel(app.Window).Count > 0)
+        {
+            return false;
+        }
+
+        return SetFor(app, AppWindows.ExeName(app)) is not { } set || menu(set) is null;
     }
 
     // 檔案 and 編輯 (the app's own when its shortcuts differ), then the app's extra menus.
@@ -191,7 +214,7 @@ internal sealed partial class ActiveAppBand : WrappedDockItem, IDisposable
         }
         else if (set.FileMenu is { } fileMenu)
         {
-            var page = new ShortcutMenuPage($"com.terry.powermeter.activeapp.{set.Id}.file", "檔案", _tracker, fileMenu);
+            var page = new ShortcutMenuPage($"com.terry.powermeter.activeapp.{set.Id}.file", "檔案", _tracker, fileMenu, app => SetFor(app, AppWindows.ExeName(app))?.Id == set.Id);
             pages.Add(page);
             items.Add(MenuItem(page, "檔案"));
         }
@@ -206,7 +229,7 @@ internal sealed partial class ActiveAppBand : WrappedDockItem, IDisposable
         }
         else if (set.EditMenu is { } editMenu)
         {
-            var page = new ShortcutMenuPage($"com.terry.powermeter.activeapp.{set.Id}.edit", "編輯", _tracker, editMenu);
+            var page = new ShortcutMenuPage($"com.terry.powermeter.activeapp.{set.Id}.edit", "編輯", _tracker, editMenu, app => SetFor(app, AppWindows.ExeName(app))?.Id == set.Id);
             pages.Add(page);
             items.Add(MenuItem(page, "編輯"));
         }
@@ -218,7 +241,7 @@ internal sealed partial class ActiveAppBand : WrappedDockItem, IDisposable
         for (var i = 0; i < set.Menus.Length; i++)
         {
             var (title, entries) = set.Menus[i];
-            var page = new ShortcutMenuPage($"com.terry.powermeter.activeapp.{set.Id}.{i}", title, _tracker, entries);
+            var page = new ShortcutMenuPage($"com.terry.powermeter.activeapp.{set.Id}.{i}", title, _tracker, entries, app => SetFor(app, AppWindows.ExeName(app))?.Id == set.Id);
             pages.Add(page);
             items.Add(MenuItem(page, title));
         }
@@ -392,6 +415,10 @@ internal sealed class ForegroundAppTracker : IDisposable
     }
 
     // Visible windows of every other app, for "hide others".
+    // Another copy of the same program (Excel started with /x, say) isn't another app to hide.
+    private static bool SameProgram(ActiveApp a, ActiveApp b) =>
+        Native.ProcessPath(a.ProcessId) is string path && string.Equals(path, Native.ProcessPath(b.ProcessId), StringComparison.OrdinalIgnoreCase);
+
     public List<IntPtr> OtherAppWindows(ActiveApp app)
     {
         var windows = new List<IntPtr>();
@@ -401,7 +428,8 @@ internal sealed class ForegroundAppTracker : IDisposable
                 (window, _) =>
                 {
                     if (window != app.Window && Native.IsWindowVisible(window) && !Native.IsIconic(window) && Native.IsAppWindow(window)
-                        && !Native.IsCloaked(window) && Describe(window, _names) is { IsDesktop: false } other && other.ProcessId != app.ProcessId)
+                        && !Native.IsCloaked(window) && Describe(window, _names) is { IsDesktop: false } other && other.ProcessId != app.ProcessId
+                        && !SameProgram(other, app))
                     {
                         windows.Add(window);
                     }
