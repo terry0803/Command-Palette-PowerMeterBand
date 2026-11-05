@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
-using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
 
 namespace PowerMeterBand;
@@ -30,7 +29,7 @@ internal sealed partial class SystemMonitorBand : WrappedDockItem, IDisposable
         _item = new DockValueListItem(DetailsPage, LabelWidth) { Title = "--" };
         Items = [_item];
 
-        DockTicker.Subscribe(Update);
+        DockTicker.Subscribe(Update, slowFirstRun: true);
     }
 
     private void Update()
@@ -76,7 +75,7 @@ internal sealed partial class SystemMonitorBand : WrappedDockItem, IDisposable
 /// CPU, GPU and memory on one page, each with the built-in Performance Monitor's chart and
 /// numbers, plus what the hardware is and the processor temperature.
 /// </summary>
-internal sealed partial class SystemMonitorPage : ContentPage
+internal sealed partial class SystemMonitorPage : LiveCardPage
 {
     // Each metric is a chart with its numbers beside it, so all three fit in the Dock's flyout
     // without scrolling (it redraws every second, which would keep jumping back to the top).
@@ -168,11 +167,11 @@ internal sealed partial class SystemMonitorPage : ContentPage
         }
         """;
 
-    private readonly FormContent _form = new() { TemplateJson = Template };
     private readonly SystemSampler _sampler;
     private HardwareInfo _hardware = HardwareInfo.Unknown;
 
     public SystemMonitorPage(SystemSampler sampler)
+        : base(Template)
     {
         _sampler = sampler;
         Id = "com.terry.powermeter.monitor.details";
@@ -182,12 +181,9 @@ internal sealed partial class SystemMonitorPage : ContentPage
         Task.Run(() => _hardware = HardwareInfo.Read());
     }
 
-    public override IContent[] GetContent() => [_form];
-
-    // Made every second even while the page is closed: telling whether it's open means having the Dock
-    // fetch it again now and then, and the Dock redraws the whole card then, so the charts flicker.
-    // (Measured: making it only while open saved nothing measurable, 8.9 ms of CPU a second either way.)
-    public void Update(SystemSnapshot s) => _form.DataJson = Json(s);
+    // Made every second even while the page is closed, so it opens on current numbers. (Measured: making it
+    // only while open saved nothing measurable, 8.9 ms of CPU a second either way.)
+    public void Update(SystemSnapshot s) => Show(Json(s));
 
     private string Json(SystemSnapshot s)
     {

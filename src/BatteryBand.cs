@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
-using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
 using Windows.Devices.Power;
 using Windows.System.Power;
@@ -203,7 +202,7 @@ internal static class BatteryGlyphs
 /// <summary>
 /// The battery's details: charge, state, time left or to full, charge rate, capacity and health.
 /// </summary>
-internal sealed partial class BatteryPage : ContentPage
+internal sealed partial class BatteryPage : LiveCardPage
 {
     private const string Template = """
         {
@@ -282,10 +281,8 @@ internal sealed partial class BatteryPage : ContentPage
         }
         """;
 
-    private readonly FormContent _form = new() { TemplateJson = Template };
-    private string? _lastJson;
-
     public BatteryPage()
+        : base(Template)
     {
         Id = "com.terry.powermeter.battery.details";
         Name = "查看詳細資訊";
@@ -299,8 +296,6 @@ internal sealed partial class BatteryPage : ContentPage
         ];
         Update(new BatteryReading(null, false, null, null, null, null, null, null));
     }
-
-    public override IContent[] GetContent() => [_form];
 
     // The built-in band's three states, from the same flags as its icon; "--" when Windows can't say.
     internal static string Status(BatteryReading s) =>
@@ -341,12 +336,6 @@ internal sealed partial class BatteryPage : ContentPage
                 : "--",
         };
 
-        // Skip unchanged data so the host doesn't re-render the card for nothing.
-        var json = data.ToJsonString();
-        if (json != _lastJson)
-        {
-            _form.DataJson = json;
-            _lastJson = json;
-        }
+        Show(data.ToJsonString());
     }
 }

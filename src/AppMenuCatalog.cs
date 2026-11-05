@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using Windows.Foundation;
+using Windows.Media.Control;
 
 namespace PowerMeterBand;
 
@@ -7,12 +9,14 @@ namespace PowerMeterBand;
 /// </summary>
 /// <param name="FileMenu">Replaces the shared 檔案 menu where its shortcuts mean something else in this app.</param>
 /// <param name="EditMenu">Replaces the shared 編輯 menu likewise (a terminal's Ctrl+C interrupts, for one).</param>
+/// <param name="Name">The app's name where its file description isn't one (PuTTY's lists what it connects with).</param>
 internal sealed record AppMenuSet(
     string Id,
     string[] Exes,
     (string Title, MenuEntry[] Entries)[] Menus,
     MenuEntry[]? FileMenu = null,
-    MenuEntry[]? EditMenu = null);
+    MenuEntry[]? EditMenu = null,
+    string? Name = null);
 
 /// <summary>
 /// App-specific menus for popular apps, built only from each app's documented shortcuts,
@@ -222,9 +226,9 @@ internal static class AppMenuCatalog
         [
             ("播放",
             [
-                Key("播放／暫停", "播放鍵", 0xE768, PlayPause),
-                Key("下一首", "下一首鍵", 0xE893, NextTrack),
-                Key("上一首", "上一首鍵", 0xE892, PreviousTrack),
+                Player("spotify", "播放／暫停", "播放鍵", 0xE768, session => session.TryTogglePlayPauseAsync(), PlayPause),
+                Player("spotify", "下一首", "下一首鍵", 0xE893, session => session.TrySkipNextAsync(), NextTrack),
+                Player("spotify", "上一首", "上一首鍵", 0xE892, session => session.TrySkipPreviousAsync(), PreviousTrack),
                 Key("隨機播放", "Ctrl+S", 0xE8B1, Ctrl, 'S'),
                 Key("重複播放", "Ctrl+R", 0xE8EE, Ctrl, 'R'),
                 Key("調高音量", "Ctrl+↑", 0xE995, Ctrl, Up),
@@ -937,6 +941,22 @@ internal static class AppMenuCatalog
         ],
         FileMenu: [CloseWindow()]),
 
+        // PuTTY passes Ctrl+C and the like to the server, where they interrupt what's running, and it pastes
+        // with Shift+Insert (its manual). Selecting text copies it already; Ctrl+Insert copies it again.
+        new("putty", ["putty.exe"], [],
+            FileMenu: [],
+            EditMenu:
+            [
+                Key("複製", "Ctrl+Insert", 0xE8C8, Ctrl, Insert),
+                Key("貼上", "Shift+Insert", 0xE77F, Shift, Insert),
+            ],
+            Name: "PuTTY"),
+
+        // A running VM's window: keys go to the guest, and what they mean there can't be known from here (in a
+        // guest's terminal Ctrl+C interrupts, in its desktop it copies), so no shared shortcuts. Closing only
+        // asks: VirtualBox offers to save, shut down or power off.
+        new("virtualboxvm", ["virtualboxvm.exe"], [], FileMenu: [CloseWindow()], EditMenu: []),
+
         // Git Bash's terminal, mintty, with its default shortcuts (mintty's manual). Ctrl+C would interrupt
         // what's running, so copy and paste are Ctrl+Insert and Shift+Insert; closing ends the shell, so
         // 檔案 only opens another window.
@@ -988,6 +1008,33 @@ internal static class AppMenuCatalog
 
     private static MenuEntry Key(string title, string shortcut, int glyph, params ushort[] chord) =>
         new(title, shortcut, glyph, app => Keys.SendTo(app, chord));
+
+    // A media key goes to whichever player Windows picks, which needn't be the app in front (a paused video in
+    // a browser, say), so this asks the app's own media session and falls back to the key if it has none yet.
+    private static MenuEntry Player(string player, string title, string shortcut, int glyph, Func<GlobalSystemMediaTransportControlsSession, IAsyncOperation<bool>> act, ushort mediaKey) =>
+        new(title, shortcut, glyph, app =>
+        {
+            try
+            {
+                var manager = GlobalSystemMediaTransportControlsSessionManager.RequestAsync().AsTask().GetAwaiter().GetResult();
+                var session = manager.GetSessions().FirstOrDefault(s => s.SourceAppUserModelId.Contains(player, StringComparison.OrdinalIgnoreCase));
+                if (session is not null && act(session).AsTask().GetAwaiter().GetResult())
+                {
+                    // Keys bring the app back first; this doesn't need it, but the keyboard should go back too.
+                    if (AppWindows.StillBelongsTo(app.Window, app))
+                    {
+                        AppWindows.Activate(app.Window);
+                    }
+
+                    return;
+                }
+            }
+            catch
+            {
+            }
+
+            Keys.SendTo(app, mediaKey);
+        });
 
     // A command of an app whose shortcuts the user can change, with its default keys in that app's notation
     // (null if it has none). The menu shows and presses whatever the user's settings make of it (KeyBindings).

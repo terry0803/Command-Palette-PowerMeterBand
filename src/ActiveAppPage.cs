@@ -169,21 +169,23 @@ internal sealed partial class ActiveAppPage : ListPage
             // Only while the app is still there: had it quit in the meantime, "others" would be everything left.
             Item("隱藏其他 App", 0xED1A, () =>
             {
-                if (AppWindows.StillBelongsTo(app.Window, app) || AppWindows.StillOf(app, windows).Any())
+                var front = AppWindows.StillOf(app, [app.Window, .. windows]).FirstOrDefault();
+                if (front != IntPtr.Zero)
                 {
                     AppWindows.Hide(_tracker.OtherAppWindows(app));
+                    AppWindows.Activate(front); // Closing the menu often leaves the foreground on the desktop.
                 }
             }), // Hide
             Item($"隱藏 {app.Name}", 0xE921, () => AppWindows.Hide(AppWindows.StillOf(app, windows))), // ChromeMinimize
             Item($"結束 {app.Name}", 0xE711, () => AppWindows.Quit(AppWindows.StillOf(app, windows))), // Cancel
         };
 
-        // Force-quitting Explorer would take the taskbar and desktop down with it. The process's start
-        // time goes along, so a confirmation answered after the app has gone can't hit a new process
-        // that got the same ID.
-        if (!AppWindows.IsExplorer(app) && AppWindows.StartTime(app.ProcessId) is DateTime started)
+        // Force-quitting Explorer would take the taskbar and desktop down with it, and an app running as
+        // administrator can't be force-quit from here. The process's start time goes along, so a confirmation
+        // answered after the app has gone can't hit a new process that got the same ID.
+        if (!AppWindows.IsExplorer(app) && !AppWindows.IsOutOfReach(app) && AppWindows.StartTime(app.ProcessId) is DateTime started)
         {
-            items.Add(new ListItem(DockCommands.Confirm($"強制結束 {app.Name}", $"要強制結束 {app.Name} 嗎？沒有儲存的內容會遺失。", () => AppWindows.ForceQuit(app.ProcessId, started)))
+            items.Add(new ListItem(DockCommands.Confirm($"強制結束 {app.Name}", "沒有儲存的內容會遺失", () => AppWindows.ForceQuit(app.ProcessId, started)))
             {
                 Title = $"強制結束 {app.Name}",
                 Subtitle = "沒有回應時使用",
@@ -205,8 +207,7 @@ internal sealed partial class ActiveAppPage : ListPage
 /// </summary>
 internal static class AppUsage
 {
-    // Memory is skipped for the second, CPU-only sample (a browser has dozens of processes to read).
-    public static Sample Measure(ActiveApp app, bool memory = true)
+    public static Sample Measure(ActiveApp app)
     {
         // Taken before the processes are listed: one that starts while they are counts as new.
         var takenAt = DateTime.UtcNow;
@@ -222,10 +223,8 @@ internal static class AppUsage
         // a shell) are listed on their own there, except the WebView2 processes that draw an app's window
         // (Teams, the new Outlook), which Task Manager also counts as the app's. Everything Explorer launches
         // isn't Explorer's, and another copy started separately (Excel with /x) isn't this one.
-        var name = Path.GetFileName(path);
-        var family = Descendants(app.ProcessId);
         var bytes = 0L;
-        foreach (var pid in family)
+        foreach (var pid in Members(app.ProcessId, Path.GetFileName(path)))
         {
             Process process;
             try
@@ -239,15 +238,6 @@ internal static class AppUsage
 
             using (process)
             {
-                // Same program name, in this sign-in session only.
-                if (pid != app.ProcessId
-                    && (SessionOf(process) != CurrentSession
-                        || Path.GetFileName(Native.ProcessPath((uint)pid)) is not string child
-                        || !(child.Equals(name, StringComparison.OrdinalIgnoreCase) || child.Equals("msedgewebview2.exe", StringComparison.OrdinalIgnoreCase))))
-                {
-                    continue;
-                }
-
                 try
                 {
                     cpu[process.Id] = (process.StartTime.ToUniversalTime(), process.TotalProcessorTime);
@@ -256,9 +246,13 @@ internal static class AppUsage
                 {
                 }
 
-                if (memory)
+                try
                 {
                     bytes += Native.PrivateWorkingSet((uint)process.Id) ?? process.WorkingSet64;
+                }
+                catch
+                {
+                    // Exited since the snapshot.
                 }
             }
         }
@@ -269,15 +263,36 @@ internal static class AppUsage
     private static readonly Dictionary<(uint Root, DateTime? Started), HashSet<(int Pid, DateTime? Started)>> KnownMembers = [];
     private static readonly LinkedList<(uint Root, DateTime? Started)> KnownOrder = new();
 
-    // A process and everything it started, through any depth, from one snapshot of all processes. A parent
-    // ID can be reused after the parent exits, so a child must have started after its parent.
-    private static HashSet<int> Descendants(uint root)
+    // The root and those of its descendants counted as part of the app (see Measure).
+    private static List<int> Members(uint root, string name)
     {
-        var parents = new Dictionary<int, int>();
+        var processes = AllProcesses();
+        var members = new List<int> { (int)root };
+        if (processes.Count == 0)
+        {
+            return members; // Without a snapshot the family it remembers must stay as it is.
+        }
+
+        foreach (var pid in Descendants(root, processes))
+        {
+            if (pid != root && processes.TryGetValue(pid, out var process)
+                && (process.Exe.Equals(name, StringComparison.OrdinalIgnoreCase) || process.Exe.Equals("msedgewebview2.exe", StringComparison.OrdinalIgnoreCase)))
+            {
+                members.Add(pid);
+            }
+        }
+
+        return members;
+    }
+
+    // Every process with its parent and program name, from one snapshot; empty if it can't be taken.
+    private static Dictionary<int, (int Parent, string Exe)> AllProcesses()
+    {
+        var processes = new Dictionary<int, (int Parent, string Exe)>();
         var snapshot = CreateToolhelp32Snapshot(0x2 /* TH32CS_SNAPPROCESS */, 0);
         if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1))
         {
-            return [(int)root];
+            return processes;
         }
 
         try
@@ -285,7 +300,7 @@ internal static class AppUsage
             var entry = new ProcessEntry { Size = (uint)Marshal.SizeOf<ProcessEntry>() };
             for (var ok = Process32First(snapshot, ref entry); ok; ok = Process32Next(snapshot, ref entry))
             {
-                parents[(int)entry.ProcessId] = (int)entry.ParentProcessId;
+                processes[(int)entry.ProcessId] = ((int)entry.ParentProcessId, entry.ExeFile);
             }
         }
         finally
@@ -293,6 +308,61 @@ internal static class AppUsage
             CloseHandle(snapshot);
         }
 
+        return processes;
+    }
+
+    // What a force quit takes down with the app: everything it started, with each process's start time.
+    // Not what's a program of its own, though: one with another name and a window of its own (a browser or
+    // Word opened from a link in the app, which is then the app's child), or anything that program started.
+    // Shells and other helpers do go, or they'd be left running with nothing to answer to.
+    public static List<(int Pid, DateTime? Started)> Helpers(uint root)
+    {
+        var processes = AllProcesses();
+        if (!processes.TryGetValue((int)root, out var app))
+        {
+            return [];
+        }
+
+        var withWindows = new HashSet<int>();
+        Native.EnumWindows(
+            (window, _) =>
+            {
+                // Cloaked ones too: a window on another virtual desktop is still a program's own.
+                if (Native.IsWindowVisible(window) && Native.IsAppWindow(window))
+                {
+                    Native.GetWindowThreadProcessId(window, out var pid);
+                    withWindows.Add((int)pid);
+                }
+
+                return true;
+            },
+            IntPtr.Zero);
+
+        var children = processes.ToLookup(process => process.Value.Parent, process => process.Key);
+        var helpers = new List<(int Pid, DateTime? Started)>();
+        var seen = new HashSet<int> { (int)root };
+        var waiting = new Queue<(int Pid, DateTime? Started)>([((int)root, AppWindows.StartTime(root))]);
+        while (waiting.TryDequeue(out var parent))
+        {
+            foreach (var child in children[parent.Pid].Where(seen.Add))
+            {
+                var started = AppWindows.StartTime((uint)child);
+                var ownProgram = !processes[child].Exe.Equals(app.Exe, StringComparison.OrdinalIgnoreCase) && withWindows.Contains(child);
+                if (started >= parent.Started && !ownProgram)
+                {
+                    helpers.Add((child, started));
+                    waiting.Enqueue((child, started));
+                }
+            }
+        }
+
+        return helpers;
+    }
+
+    // A process and everything it started, through any depth. A parent ID can be reused after the parent
+    // exits, so a child must have started after its parent.
+    private static HashSet<int> Descendants(uint root, Dictionary<int, (int Parent, string Exe)> processes)
+    {
         var family = new HashSet<int> { (int)root };
         var started = new Dictionary<int, DateTime?>();
         DateTime? Started(int pid)
@@ -314,7 +384,7 @@ internal static class AppUsage
             {
                 foreach (var (pid, start) in known)
                 {
-                    if (parents.ContainsKey(pid) && Started(pid) == start)
+                    if (processes.ContainsKey(pid) && Started(pid) == start)
                     {
                         family.Add(pid);
                     }
@@ -326,7 +396,7 @@ internal static class AppUsage
         for (var grew = true; grew;)
         {
             grew = false;
-            foreach (var (pid, parent) in parents)
+            foreach (var (pid, (parent, _)) in processes)
             {
                 if (!family.Contains(pid) && family.Contains(parent) && Started(pid) >= Started(parent))
                 {
@@ -383,21 +453,6 @@ internal static class AppUsage
         public string ExeFile;
     }
 
-    // The foreground app always runs in the user's own session, the same as the extension.
-    private static readonly int CurrentSession = Process.GetCurrentProcess().SessionId;
-
-    private static int SessionOf(Process process)
-    {
-        try
-        {
-            return process.SessionId;
-        }
-        catch
-        {
-            return -1;
-        }
-    }
-
     // Share of the whole CPU, like Task Manager. Each process is compared with itself (its ID and start
     // time, since IDs get reused): a browser tab's process that exits mid-way must not drag the total
     // down. One missing from the first sample counts in full only if it started after it; one that was
@@ -443,6 +498,11 @@ internal static class AppWindows
     private const int SwRestore = 9;
     private const int SwMaximize = 3;
 
+    private static readonly bool RunningElevated = Native.IsElevated((uint)Environment.ProcessId);
+
+    // Windows keeps keys, menu commands and most messages from here out of an app running as administrator.
+    public static bool IsOutOfReach(ActiveApp app) => !RunningElevated && Native.IsElevated(app.ProcessId);
+
     // The app's visible top-level windows in z-order, plus the window we saw (a Store app's frame belongs to another process).
     public static List<IntPtr> Of(ActiveApp app)
     {
@@ -480,7 +540,11 @@ internal static class AppWindows
     {
         foreach (var window in windows)
         {
-            Native.ShowWindowAsync(window, Native.SwMinimize);
+            // A window running as administrator refuses this but takes the system command.
+            if (!Native.ShowWindowAsync(window, Native.SwMinimize))
+            {
+                Native.PostMessage(window, Native.WmSysCommand, Native.ScMinimize, IntPtr.Zero);
+            }
         }
     }
 
@@ -489,7 +553,11 @@ internal static class AppWindows
     {
         foreach (var window in windows)
         {
-            Native.PostMessage(window, Native.WmClose, IntPtr.Zero, IntPtr.Zero);
+            // Likewise; the system command ends in the same close request.
+            if (!Native.PostMessage(window, Native.WmClose, IntPtr.Zero, IntPtr.Zero))
+            {
+                Native.PostMessage(window, Native.WmSysCommand, Native.ScClose, IntPtr.Zero);
+            }
         }
     }
 
@@ -506,17 +574,33 @@ internal static class AppWindows
         }
     }
 
+    // The app and its helpers (see AppUsage.Helpers), listed first since killing the app ends the links to them.
+    public static void ForceQuit(uint pid, DateTime started)
+    {
+        if (StartTime(pid) != started)
+        {
+            return;
+        }
+
+        var helpers = AppUsage.Helpers(pid);
+        Kill((int)pid, started);
+        foreach (var (helper, helperStarted) in helpers)
+        {
+            Kill(helper, helperStarted);
+        }
+    }
+
     // Only the process that was asked about: a process ID gets reused once its process is gone. Its handle
     // is opened first and held, so the start time is checked and the kill done on that same process.
-    public static void ForceQuit(uint pid, DateTime started)
+    private static void Kill(int pid, DateTime? started)
     {
         try
         {
-            using var process = Process.GetProcessById((int)pid);
+            using var process = Process.GetProcessById(pid);
             _ = process.SafeHandle;
             if (process.StartTime == started)
             {
-                process.Kill(entireProcessTree: true);
+                process.Kill();
             }
         }
         catch

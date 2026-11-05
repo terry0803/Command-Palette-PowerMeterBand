@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Windows.Devices.Power;
 using Windows.System.Power;
 
@@ -22,11 +21,15 @@ internal sealed record PowerSnapshot(
 /// </summary>
 internal sealed class PowerSampler : IDisposable
 {
-    private readonly RetryingCounter _systemPower = new("Power Meter", "Power", "Power Meter (0)");
-    private readonly RetryingCounter _cpuPower = new("Energy Meter", "Power", "RAPL_Package0_PKG");
+    private const int SystemPower = 0;
+    private const int CpuPower = 1;
+    private const int GpuPower = 2;
 
     // RAPL PP1 is the integrated GPU's power plane (verified: ~0.04 W idle, up to 13 W under a WebGL load).
-    private readonly RetryingCounter _gpuPower = new("Energy Meter", "Power", "RAPL_Package0_PP1");
+    private readonly CounterSet _counters = new(
+        @"\Power Meter(Power Meter (0))\Power",
+        @"\Energy Meter(RAPL_Package0_PKG)\Power",
+        @"\Energy Meter(RAPL_Package0_PP1)\Power");
 
     public PowerSnapshot Read()
     {
@@ -40,11 +43,10 @@ internal sealed class PowerSampler : IDisposable
         }
 
         var rate = report?.ChargeRateInMilliwatts;
+        DischargeAverage.Add(rate);
         var pluggedIn = IsPluggedIn();
-
-        // Plugged in, the meter's reading would be thrown away below, so don't read it. (It's an
-        // instant reading, not a rate, so there's no baseline to keep for when the charger comes off.)
-        var meter = pluggedIn == false ? _systemPower.ReadWatts() : null;
+        _counters.Collect();
+        var meter = Watts(SystemPower);
 
         // Only a sure "on battery" makes the meter or discharge rate the whole system's draw: plugged in
         // with the battery helping out, the discharge rate is only part of it.
@@ -54,14 +56,17 @@ internal sealed class PowerSampler : IDisposable
 
         return new PowerSnapshot(
             system,
-            _cpuPower.ReadWatts(),
-            _gpuPower.ReadWatts(),
+            Watts(CpuPower),
+            Watts(GpuPower),
             rate,
             report?.RemainingCapacityInMilliwattHours,
             report?.FullChargeCapacityInMilliwattHours,
             report?.Status,
             pluggedIn);
     }
+
+    // Power Meter and Energy Meter counters report milliwatts.
+    private double? Watts(int counter) => _counters.Value(counter) / 1000.0;
 
     private static bool? IsPluggedIn()
     {
@@ -75,74 +80,52 @@ internal sealed class PowerSampler : IDisposable
         }
     }
 
-    public void Dispose()
-    {
-        _systemPower.Dispose();
-        _cpuPower.Dispose();
-        _gpuPower.Dispose();
-    }
+    public void Dispose() => _counters.Dispose();
 }
 
 /// <summary>
-/// A performance counter that is recreated after it fails to open or read
-/// (e.g. counters not ready right after sign-in), retrying every 30 seconds.
+/// The battery's discharge rate averaged over the last few minutes, for estimating the time left: the
+/// reported rate jumps between 8 and 15 W in normal use, which moved the estimate by hours within a minute.
+/// Fed once a second. Charging isn't averaged: it stops and starts (holding at a charge limit, say), and the
+/// time to full should go away the moment it does.
 /// </summary>
-internal sealed class RetryingCounter(string category, string counter, string instance) : IDisposable
+internal static class DischargeAverage
 {
-    // Milliseconds since boot, which setting the clock back doesn't stretch.
-    private const long RetryIntervalMs = 30_000;
+    private const double TimeConstantSeconds = 180;
+    private const long GapMs = 10_000; // Longer than this (sleep, say) and the old average no longer applies.
 
-    private PerformanceCounter? _counter;
-    private long _nextAttempt;
+    private static readonly Lock Gate = new();
+    private static double _average;
+    private static int _samples;
+    private static long _lastAt;
 
-    // Power Meter / Energy Meter counters report milliwatts.
-    public double? ReadWatts() => Read() / 1000.0;
+    public static void Add(int? rate) => Add(rate, Environment.TickCount64);
 
-    public float? Read()
+    internal static void Add(int? rate, long now)
     {
-        if (_counter is null)
+        lock (Gate)
         {
-            if (Environment.TickCount64 < _nextAttempt)
+            if (rate is not < 0 || now - _lastAt > GapMs)
             {
-                return null;
+                _samples = 0;
             }
 
-            _counter = TryCreate();
-            if (_counter is null)
+            _lastAt = now;
+            if (rate is int value and < 0)
             {
-                _nextAttempt = Environment.TickCount64 + RetryIntervalMs;
-                return null;
+                // A plain average to begin with, so a spike in the first reading doesn't stick around.
+                _samples++;
+                _average += (value - _average) * Math.Max(1.0 / _samples, 1 / TimeConstantSeconds);
             }
-        }
-
-        try
-        {
-            return _counter.NextValue();
-        }
-        catch
-        {
-            _counter.Dispose();
-            _counter = null;
-            _nextAttempt = Environment.TickCount64 + RetryIntervalMs;
-            return null;
         }
     }
 
-    private PerformanceCounter? TryCreate()
+    // The rate to estimate with: the average while discharging, otherwise the reading itself.
+    public static int? For(int? rate)
     {
-        PerformanceCounter? c = null;
-        try
+        lock (Gate)
         {
-            c = new PerformanceCounter(category, counter, instance, readOnly: true);
-            c.NextValue();
-            return c;
-        }
-        catch
-        {
-            c?.Dispose();
-            return null;
+            return rate < 0 && _samples > 0 ? (int)Math.Round(_average) : rate;
         }
     }
-
-    public void Dispose() => _counter?.Dispose();
 }

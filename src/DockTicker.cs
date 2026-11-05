@@ -11,7 +11,10 @@ internal static class DockTicker
     private static readonly Timer Timer = new(_ => Tick(), null, Timeout.Infinite, Timeout.Infinite);
     private static int _ticking;
 
-    public static void Subscribe(Action handler)
+    // Slow first run: bands are made before the extension can answer the Dock, and Command Palette waits for
+    // it before loading any other extension, so a first reading that takes a second (opening performance
+    // counters) goes on a pool thread, and the band shows its placeholder until then.
+    public static void Subscribe(Action handler, bool slowFirstRun = false)
     {
         lock (Gate)
         {
@@ -22,7 +25,25 @@ internal static class DockTicker
             }
         }
 
-        handler(); // Show something right away rather than waiting for the next second.
+        // Show something right away rather than waiting for the next second.
+        if (slowFirstRun)
+        {
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    handler();
+                }
+                catch
+                {
+                    // On a pool thread an exception would take every band down; the next tick tries again.
+                }
+            });
+        }
+        else
+        {
+            handler();
+        }
     }
 
     public static void Unsubscribe(Action handler)

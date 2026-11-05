@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
-using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
 using Windows.System.UserProfile;
 
@@ -60,7 +59,7 @@ internal sealed partial class ClockBand : WrappedDockItem, IDisposable
 /// <summary>
 /// The full date and time: seconds, the lunar date, week and day of the year, time zone and region.
 /// </summary>
-internal sealed partial class ClockPage : ContentPage
+internal sealed partial class ClockPage : LiveCardPage
 {
     private const string Template = """
         {
@@ -107,7 +106,6 @@ internal sealed partial class ClockPage : ContentPage
     private static readonly string[] Months = ["正", "二", "三", "四", "五", "六", "七", "八", "九", "十", "冬", "臘"];
     private static readonly string[] Digits = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
 
-    private readonly FormContent _form = new() { TemplateJson = Template };
     private string _region = Region();
     private int _lastMinute = -1;
     private DateTime _day;
@@ -117,6 +115,7 @@ internal sealed partial class ClockPage : ContentPage
     private string _dayOfYear = string.Empty;
 
     public ClockPage()
+        : base(Template)
     {
         Id = "com.terry.powermeter.clock.details";
         Name = "查看詳細資訊";
@@ -131,11 +130,8 @@ internal sealed partial class ClockPage : ContentPage
         Update(DateTime.Now);
     }
 
-    public override IContent[] GetContent() => [_form];
-
-    // Made every second, open or not: making it only while open saved nothing measurable, and telling
-    // whether the page is open (having the Dock fetch it again) can miss and leave the time stuck.
-    public void Update(DateTime now) => _form.DataJson = Json(now);
+    // Made every second, open or not, so the page opens on the current time.
+    public void Update(DateTime now) => Show(Json(now));
 
     private string Json(DateTime now)
     {

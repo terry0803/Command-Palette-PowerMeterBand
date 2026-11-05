@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Management;
 using System.Runtime.CompilerServices;
@@ -157,7 +156,7 @@ internal sealed class SystemSampler : IDisposable
 
     // Found on first use and looked for again every 30 seconds until found: the thermal provider
     // can come up after this extension does.
-    private RetryingCounter? _temperature;
+    private CounterSet? _temperature;
     private long _nextZoneLookup;
 
     // "已快取" as Task Manager counts it: the standby list (all priorities) plus the modified list, not
@@ -212,11 +211,12 @@ internal sealed class SystemSampler : IDisposable
             _nextZoneLookup = Environment.TickCount64 + 30_000;
             if (ThermalZone() is string zone)
             {
-                _temperature = new("Thermal Zone Information", "High Precision Temperature", zone);
+                _temperature = new($@"\Thermal Zone Information({zone})\High Precision Temperature");
             }
         }
 
-        return _temperature?.Read();
+        _temperature?.Collect();
+        return _temperature?.Value(0);
     }
 
     // Only a zone that stands for the processor: TZ00 (it follows CPU load within seconds, 53 -> 67 °C
@@ -224,16 +224,9 @@ internal sealed class SystemSampler : IDisposable
     // zone (the chassis, the battery) would put a wrong number under CPU, so then the page shows "--".
     private static string? ThermalZone()
     {
-        try
-        {
-            var zones = new PerformanceCounterCategory("Thermal Zone Information").GetInstanceNames();
-            return zones.FirstOrDefault(z => z.EndsWith("tz00", StringComparison.OrdinalIgnoreCase))
-                ?? zones.FirstOrDefault(z => z.Contains("cpu", StringComparison.OrdinalIgnoreCase));
-        }
-        catch
-        {
-            return null;
-        }
+        var zones = CounterSet.Instances(@"\Thermal Zone Information(*)\High Precision Temperature");
+        return zones.FirstOrDefault(z => z.EndsWith("tz00", StringComparison.OrdinalIgnoreCase))
+            ?? zones.FirstOrDefault(z => z.Contains("cpu", StringComparison.OrdinalIgnoreCase));
     }
 
     public void Dispose()
@@ -461,6 +454,8 @@ internal sealed class CounterSet(params string[] englishPaths) : IDisposable
     private const uint Format = 0x200 | 0x8000; // PDH_FMT_DOUBLE | PDH_FMT_NOCAP100
     private const long RetryAfterMs = 30_000;
     private const long HoldMs = 3_000;
+    private const uint MoreData = 0x800007D2;
+    private const int ArrayItemSize = 24; // PDH_FMT_COUNTERVALUE_ITEM_W on 64-bit Windows, its name pointer first
 
     private readonly IntPtr[] _counters = new IntPtr[englishPaths.Length];
     private readonly float?[] _last = new float?[englishPaths.Length];
@@ -529,6 +524,46 @@ internal sealed class CounterSet(params string[] englishPaths) : IDisposable
         }
 
         return _last[index] is float last && now - _lastAt[index] <= HoldMs ? last : null;
+    }
+
+    // The instances a wildcard path covers right now. (PDH's own listing only takes localized object names.)
+    public static List<string> Instances(string englishPath)
+    {
+        var names = new List<string>();
+        if (PdhOpenQuery(null, IntPtr.Zero, out var query) != 0)
+        {
+            return names;
+        }
+
+        try
+        {
+            var size = 0u;
+            if (PdhAddEnglishCounter(query, englishPath, IntPtr.Zero, out var counter) == 0 && PdhCollectQueryData(query) == 0
+                && PdhGetFormattedCounterArray(counter, Format, ref size, out _, IntPtr.Zero) == MoreData)
+            {
+                var buffer = Marshal.AllocHGlobal((int)size);
+                try
+                {
+                    if (PdhGetFormattedCounterArray(counter, Format, ref size, out var count, buffer) == 0)
+                    {
+                        for (var i = 0; i < count; i++)
+                        {
+                            names.Add(Marshal.PtrToStringUni(Marshal.ReadIntPtr(buffer, i * ArrayItemSize)) ?? string.Empty);
+                        }
+                    }
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            }
+        }
+        finally
+        {
+            PdhCloseQuery(query);
+        }
+
+        return names;
     }
 
     private void Close()

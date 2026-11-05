@@ -37,7 +37,7 @@ internal sealed partial class PowerDockBand : WrappedDockItem, IDisposable
         };
         Items = [_item];
 
-        DockTicker.Subscribe(Update);
+        DockTicker.Subscribe(Update, slowFirstRun: true);
     }
 
     private void Update()

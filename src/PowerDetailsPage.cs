@@ -1,5 +1,4 @@
 using System.Text.Json.Nodes;
-using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
 using Windows.System.Power;
 
@@ -9,7 +8,7 @@ namespace PowerMeterBand;
 /// Details page opened from the Dock band, laid out like the built-in
 /// Performance Monitor pages (an Adaptive Card whose data refreshes every second).
 /// </summary>
-internal sealed partial class PowerDetailsPage : ContentPage
+internal sealed partial class PowerDetailsPage : LiveCardPage
 {
     private const string Template = """
         {
@@ -125,10 +124,10 @@ internal sealed partial class PowerDetailsPage : ContentPage
         }
         """;
 
-    private readonly FormContent _form = new() { TemplateJson = Template };
     private readonly PowerHistory _history = new();
 
     public PowerDetailsPage()
+        : base(Template)
     {
         Id = "com.terry.powermeter.details";
         Name = "查看詳細資訊";
@@ -141,10 +140,6 @@ internal sealed partial class PowerDetailsPage : ContentPage
         ];
         Update(new PowerSnapshot(null, null, null, null, null, null, null, false));
     }
-
-    private string? _lastJson;
-
-    public override IContent[] GetContent() => [_form];
 
     public void Update(PowerSnapshot s)
     {
@@ -186,24 +181,16 @@ internal sealed partial class PowerDetailsPage : ContentPage
         var (label, time) = EstimateTime(s.RemainingMilliwattHours, s.FullChargeMilliwattHours, s.BatteryRateMilliwatts);
         data["timeLabel"] = label;
         data["timeRemaining"] = time;
-
-        // Skip unchanged data so the host doesn't re-render the card for nothing.
-        var json = data.ToJsonString();
-        if (json == _lastJson)
-        {
-            return;
-        }
-
-        _form.DataJson = json;
-        _lastJson = json;
+        Show(data.ToJsonString());
     }
 
     private static string FormatWatts(double? watts) => watts is double w ? $"{w:0.0} W" : "--";
 
-    // From the battery's own capacity and charge rate; shared with the battery page so both agree.
+    // From the battery's own capacity and charge rate, with the discharge rate averaged (see DischargeAverage);
+    // shared with the battery page so both agree.
     internal static (string Label, string Time) EstimateTime(int? remainingMilliwattHours, int? fullMilliwattHours, int? rateMilliwatts)
     {
-        if (remainingMilliwattHours is not int rem || rateMilliwatts is not int rate)
+        if (remainingMilliwattHours is not int rem || DischargeAverage.For(rateMilliwatts) is not int rate)
         {
             return ("預估剩餘時間", "--");
         }

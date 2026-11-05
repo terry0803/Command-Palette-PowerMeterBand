@@ -1,5 +1,4 @@
 using System.Text.Json.Nodes;
-using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
 
 namespace PowerMeterBand;
@@ -8,7 +7,7 @@ namespace PowerMeterBand;
 /// Details page opened from the network Dock band: both speeds, the connected adapters,
 /// and a button that switches which speed the Dock shows.
 /// </summary>
-internal sealed partial class NetSpeedDetailsPage : ContentPage
+internal sealed partial class NetSpeedDetailsPage : LiveCardPage
 {
     private const string Template = """
         {
@@ -69,10 +68,8 @@ internal sealed partial class NetSpeedDetailsPage : ContentPage
         }
         """;
 
-    private readonly FormContent _form = new() { TemplateJson = Template };
-    private string? _lastJson;
-
     public NetSpeedDetailsPage()
+        : base(Template)
     {
         Id = "com.terry.powermeter.netspeed.details";
         Name = "查看詳細資訊";
@@ -85,8 +82,6 @@ internal sealed partial class NetSpeedDetailsPage : ContentPage
         ];
         Update(new NetSpeedSnapshot(null, null, null)); // Replaced by the band's first reading right away.
     }
-
-    public override IContent[] GetContent() => [_form];
 
     public void Update(NetSpeedSnapshot s)
     {
@@ -103,14 +98,6 @@ internal sealed partial class NetSpeedDetailsPage : ContentPage
             ["direction"] = NetSpeedSettings.Describe(NetSpeedSettings.Direction),
         };
 
-        // Skip unchanged data so the host doesn't re-render the card for nothing.
-        var json = data.ToJsonString();
-        if (json == _lastJson)
-        {
-            return;
-        }
-
-        _form.DataJson = json;
-        _lastJson = json;
+        Show(data.ToJsonString());
     }
 }

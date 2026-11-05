@@ -43,10 +43,10 @@ internal sealed partial class SystemMenuPage : ListPage
             Item("關於這台電腦", "\uE946", new OpenUrlCommand("ms-settings:about") { Name = "開啟" }), // Info
             Item("系統設定", "\uE713", new OpenUrlCommand("ms-settings:") { Name = "開啟" }), // Setting
             Item("Microsoft Store", "\uE719", new OpenUrlCommand("ms-windows-store:") { Name = "開啟" }), // Shop
-            Item("強制結束⋯", "\uE711", DockCommands.AfterDismiss(() => Start("taskmgr.exe"))), // Cancel
+            Item("強制結束⋯", "\uE711", DockCommands.AfterDismiss(() => Process.Start(new ProcessStartInfo("taskmgr.exe") { UseShellExecute = true }))), // Cancel
             Item("睡眠", "\uE708", DockCommands.AfterDismiss(Sleep)), // QuietHours
-            Item("重新啟動⋯", "\uE777", DockCommands.Confirm("重新啟動", "要重新啟動電腦嗎？", () => Start("shutdown", "/g /t 0"))), // UpdateRestore
-            Item("關機⋯", "\uE7E8", DockCommands.Confirm("關機", "要關機嗎？", () => Start("shutdown", "/s /hybrid /t 0"))), // PowerButton
+            Item("重新啟動⋯", "\uE777", DockCommands.Confirm("重新啟動", "要重新啟動電腦嗎？", () => Shutdown("/g /t 0"))), // UpdateRestore
+            Item("關機⋯", "\uE7E8", DockCommands.Confirm("關機", "要關機嗎？", () => Shutdown("/s /hybrid /t 0"))), // PowerButton
             Item("鎖定畫面", "\uE72E", DockCommands.AfterDismiss(() => LockWorkStation())), // Lock
             Item("登出⋯", "\uF3B1", DockCommands.Confirm("登出", "要登出嗎？", () => ExitWindowsEx(0, 0))), // Leave
         ];
@@ -72,8 +72,9 @@ internal sealed partial class SystemMenuPage : ListPage
         }
     }
 
-    private static void Start(string file, string arguments = "") =>
-        Process.Start(new ProcessStartInfo(file, arguments) { UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden });
+    // Hidden so no console flashes up; other programs would take it as the state to start their window in.
+    private static void Shutdown(string arguments) =>
+        Process.Start(new ProcessStartInfo("shutdown", arguments) { UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden });
 
     private static readonly IntPtr HwndBroadcast = 0xFFFF;
     private const uint WmSysCommand = 0x0112;
@@ -106,15 +107,29 @@ internal static class DockCommands
     };
 
     // For actions that are hard to undo (restart, shut down, sign out, force quit), like the "⋯" items on a Mac.
-    public static AnonymousCommand Confirm(string title, string question, Action action) => new(() => { })
+    public static ConfirmPage Confirm(string title, string question, Action action) => new(title, question, action);
+}
+
+/// <summary>
+/// Asks before an action, inside the Dock's own menu. Command Palette's confirmation dialog is no use from a
+/// Dock menu: it opens in the palette's hidden window, so nothing shows, no key reaches it, and that hidden
+/// window keeps the keyboard. 取消 comes first, so a stray Enter or extra click doesn't go ahead.
+/// </summary>
+internal sealed partial class ConfirmPage : ListPage
+{
+    private readonly IListItem[] _items;
+
+    public ConfirmPage(string title, string question, Action action)
     {
-        Name = "執行",
-        Result = CommandResult.Confirm(new ConfirmationArgs
-        {
-            Title = title,
-            Description = question,
-            PrimaryCommand = AfterDismiss(action, title),
-            IsPrimaryCommandCritical = true,
-        }),
-    };
+        Id = $"com.terry.powermeter.confirm.{title}";
+        Name = "執行";
+        Title = title;
+        _items =
+        [
+            new ListItem(new AnonymousCommand(() => { }) { Name = "取消", Result = CommandResult.Dismiss() }) { Title = "取消", Icon = Glyphs.Of(0xE711) }, // Cancel
+            new ListItem(DockCommands.AfterDismiss(action, title)) { Title = title, Subtitle = question, Icon = Glyphs.Of(0xE7BA) }, // Warning
+        ];
+    }
+
+    public override IListItem[] GetItems() => _items;
 }

@@ -13,12 +13,13 @@ internal sealed record NetSpeedSnapshot(
 
 /// <summary>
 /// Measures upload and download speed across all physical network adapters, the same way
-/// as the built-in Performance Monitor: byte counters from GetIfTable2, skipping virtual,
+/// as the built-in Performance Monitor: the interface table's byte counters, skipping virtual,
 /// filter and endpoint interfaces (VPNs, Hyper-V switches, Wi-Fi Direct, ...).
 /// </summary>
 internal sealed class NetSpeedSampler
 {
     private readonly Dictionary<ulong, (ulong Received, ulong Sent)> _previous = [];
+    private readonly InterfaceTable _table = new();
     private long? _lastTimestamp;
 
     public NetSpeedSnapshot Read()
@@ -26,7 +27,7 @@ internal sealed class NetSpeedSampler
         List<InterfaceRow> rows;
         try
         {
-            rows = InterfaceTable.ReadPhysical();
+            rows = _table.ReadPhysical();
         }
         catch
         {
@@ -72,10 +73,13 @@ internal sealed class NetSpeedSampler
     private readonly record struct InterfaceRow(ulong Luid, string Name, ulong ReceivedBytes, ulong SentBytes, ulong LinkSpeed, bool IsUp);
 
     /// <summary>
-    /// Reads MIB_IF_TABLE2 by field offset, which avoids declaring the whole 1352-byte MIB_IF_ROW2.
+    /// Reads MIB_IF_TABLE2 by field offset, which avoids declaring the whole 1352-byte MIB_IF_ROW2. The table
+    /// lists dozens of interfaces and only a few count, so it's read every 10 seconds, or as soon as one of
+    /// them fails or none is connected; in between just the ones that count are read.
     /// </summary>
-    private static class InterfaceTable
+    private sealed class InterfaceTable
     {
+        private const long FullReadMs = 10_000;
         private const int RowSize = 1352;
         private const int TableOffset = 8; // ULONG NumEntries, then rows aligned to 8 bytes.
         private const int LuidOffset = 0;
@@ -99,7 +103,46 @@ internal sealed class NetSpeedSampler
         [DllImport("iphlpapi.dll")]
         private static extern void FreeMibTable(IntPtr memory);
 
-        public static List<InterfaceRow> ReadPhysical()
+        [DllImport("iphlpapi.dll")]
+        private static extern uint GetIfEntry2(IntPtr row);
+
+        // Lives as long as the extension, like the sampler that owns it.
+        private readonly IntPtr _row = Marshal.AllocHGlobal(RowSize);
+        private List<ulong> _physical = [];
+        private long _fullReadAt;
+
+        public List<InterfaceRow> ReadPhysical()
+        {
+            if (Environment.TickCount64 < _fullReadAt && ReadKnown() is { } known && known.Any(row => row.IsUp))
+            {
+                return known;
+            }
+
+            var rows = ReadAll();
+            _physical = [.. rows.Select(row => row.Luid)];
+            _fullReadAt = Environment.TickCount64 + FullReadMs;
+            return rows;
+        }
+
+        // Null if one is gone.
+        private List<InterfaceRow>? ReadKnown()
+        {
+            var rows = new List<InterfaceRow>(_physical.Count);
+            foreach (var luid in _physical)
+            {
+                Marshal.WriteInt64(_row, LuidOffset, (long)luid);
+                if (GetIfEntry2(_row) != 0)
+                {
+                    return null;
+                }
+
+                rows.Add(Parse(_row));
+            }
+
+            return rows;
+        }
+
+        private static List<InterfaceRow> ReadAll()
         {
             var error = GetIfTable2(out var table);
             if (error != 0)
@@ -120,19 +163,7 @@ internal sealed class NetSpeedSampler
                         continue;
                     }
 
-                    var name = Marshal.PtrToStringUni(row + DescriptionOffset);
-                    if (string.IsNullOrWhiteSpace(name))
-                    {
-                        name = Marshal.PtrToStringUni(row + AliasOffset) ?? string.Empty;
-                    }
-
-                    rows.Add(new InterfaceRow(
-                        (ulong)Marshal.ReadInt64(row, LuidOffset),
-                        name,
-                        (ulong)Marshal.ReadInt64(row, InOctetsOffset),
-                        (ulong)Marshal.ReadInt64(row, OutOctetsOffset),
-                        KnownLinkSpeed((ulong)Marshal.ReadInt64(row, ReceiveLinkSpeedOffset), (ulong)Marshal.ReadInt64(row, TransmitLinkSpeedOffset)),
-                        Marshal.ReadInt32(row, OperStatusOffset) == OperStatusUp));
+                    rows.Add(Parse(row));
                 }
 
                 return rows;
@@ -141,6 +172,23 @@ internal sealed class NetSpeedSampler
             {
                 FreeMibTable(table);
             }
+        }
+
+        private static InterfaceRow Parse(IntPtr row)
+        {
+            var name = Marshal.PtrToStringUni(row + DescriptionOffset);
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                name = Marshal.PtrToStringUni(row + AliasOffset) ?? string.Empty;
+            }
+
+            return new InterfaceRow(
+                (ulong)Marshal.ReadInt64(row, LuidOffset),
+                name,
+                (ulong)Marshal.ReadInt64(row, InOctetsOffset),
+                (ulong)Marshal.ReadInt64(row, OutOctetsOffset),
+                KnownLinkSpeed((ulong)Marshal.ReadInt64(row, ReceiveLinkSpeedOffset), (ulong)Marshal.ReadInt64(row, TransmitLinkSpeedOffset)),
+                Marshal.ReadInt32(row, OperStatusOffset) == OperStatusUp);
         }
 
         // ulong.MaxValue means the speed is unknown.

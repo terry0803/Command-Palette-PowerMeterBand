@@ -7,7 +7,7 @@ namespace PowerMeterBand;
 /// <summary>
 /// One menu item that acts on the current app.
 /// </summary>
-/// <param name="SkipFor">Apps (exe names) where the shortcut means something else, so the item is left out.</param>
+/// <param name="SkipFor">Apps (exe names) where the shortcut means something else or nothing, so the item is left out.</param>
 internal sealed record MenuEntry(string Title, string Shortcut, int Glyph, Action<ActiveApp> Run, string Section = "", params string[] SkipFor)
 {
     // For apps whose shortcuts the user can change (VS Code, Windows Terminal): the app's own name for the
@@ -58,7 +58,7 @@ internal sealed partial class ShortcutMenuPage : ListPage
         new("複製", "Ctrl+C", 0xE8C8, app => Keys.SendTo(app, Keys.Control, 0x43)), // Copy
         new("貼上", "Ctrl+V", 0xE77F, app => Keys.SendTo(app, Keys.Control, 0x56)), // Paste
         new("全選", "Ctrl+A", 0xE8B3, app => Keys.SendTo(app, Keys.Control, 0x41)), // SelectAll
-        new("尋找⋯", "Ctrl+F", 0xE721, app => Keys.SendTo(app, Keys.Control, 0x46), SkipFor: ["OUTLOOK.EXE", "olk.exe"]), // Search; Outlook's Ctrl+F forwards mail
+        new("尋找⋯", "Ctrl+F", 0xE721, app => Keys.SendTo(app, Keys.Control, 0x46), SkipFor: ["OUTLOOK.EXE", "olk.exe", "mspaint.exe"]), // Search; Outlook's Ctrl+F forwards mail, Paint has no search
         new("剪貼簿記錄", "Win+V", 0xF0E3, app => Keys.SendTo(app, Keys.LeftWindows, 0x56), "系統"), // ClipboardList
         new("表情符號與符號", "Win+.", 0xE76E, app => Keys.SendTo(app, Keys.LeftWindows, 0xBE), "系統"), // Emoji2
         new("螢幕擷取", "Win+Shift+S", 0xE722, app => Keys.SendTo(app, Keys.LeftWindows, Keys.Shift, 0x53), "系統"), // Camera
@@ -139,10 +139,10 @@ internal sealed partial class WindowMenuPage : ListPage
         var topmost = AppWindows.IsTopmost(current);
         var items = new List<IListItem>
         {
-            Item("貼齊左半邊", 0xE90C, On(current, window => AppWindows.SnapHalf(window, left: true))), // DockLeft
-            Item("貼齊右半邊", 0xE90D, On(current, window => AppWindows.SnapHalf(window, left: false))), // DockRight
-            Item(maximized ? "還原大小" : "最大化", maximized ? 0xE923 : 0xE922, On(current, AppWindows.ToggleMaximize)), // ChromeRestore / ChromeMaximize
-            Item(topmost ? "取消保持在最上層" : "保持在最上層", topmost ? 0xE77A : 0xE718, On(current, window => AppWindows.SetTopmost(window, !topmost))), // Unpin / Pin
+            Item("貼齊左半邊", 0xE90C, Back(current, window => AppWindows.SnapHalf(window, left: true))), // DockLeft
+            Item("貼齊右半邊", 0xE90D, Back(current, window => AppWindows.SnapHalf(window, left: false))), // DockRight
+            Item(maximized ? "還原大小" : "最大化", maximized ? 0xE923 : 0xE922, Back(current, AppWindows.ToggleMaximize)), // ChromeRestore / ChromeMaximize
+            Item(topmost ? "取消保持在最上層" : "保持在最上層", topmost ? 0xE77A : 0xE718, Back(current, window => AppWindows.SetTopmost(window, !topmost))), // Unpin / Pin
             Item("最小化", 0xE921, On(current, window => AppWindows.Hide([window]))), // ChromeMinimize
         };
 
@@ -163,6 +163,13 @@ internal sealed partial class WindowMenuPage : ListPage
                 act(window);
             }
         };
+
+        // Likewise, and hands the window the keyboard again: closing the menu often leaves it on the desktop.
+        Action Back(IntPtr window, Action<IntPtr> act) => On(window, target =>
+        {
+            act(target);
+            AppWindows.Activate(target);
+        });
     }
 
     public void Refresh() => RaiseItemsChanged();

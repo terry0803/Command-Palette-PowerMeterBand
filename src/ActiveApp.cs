@@ -33,8 +33,6 @@ internal sealed partial class ActiveAppBand : WrappedDockItem, IDisposable
     private const double MenuLabelWidthDips = 90;
     private const string NameOnly = "name-only"; // Menu key when only the name shows (desktop aside)
 
-    private static readonly bool RunningElevated = Native.IsElevated((uint)Environment.ProcessId);
-
     private readonly ForegroundAppTracker _tracker = new();
     private readonly DockTextListItem _item;
     private readonly ShortcutMenuPage _fileMenu;
@@ -116,7 +114,7 @@ internal sealed partial class ActiveAppBand : WrappedDockItem, IDisposable
         // Windows keeps keys and menu commands from here out of an app running as administrator, so that
         // shows just its name rather than menus that would do nothing. So does a Store app's frame until
         // the app inside is known, since anything sent now would go to the host of every Store app.
-        var unreachable = !app.IsDesktop && (app.IsFrameOnly || (!RunningElevated && Native.IsElevated(app.ProcessId)));
+        var unreachable = !app.IsDesktop && (app.IsFrameOnly || AppWindows.IsOutOfReach(app));
         var classic = app.IsDesktop || unreachable ? [] : ClassicMenu.TopLevel(app.Window);
         var exe = app.IsDesktop ? string.Empty : AppWindows.ExeName(app);
         var set = classic.Count > 0 || app.IsDesktop || unreachable ? null : SetFor(app, exe);
@@ -302,6 +300,9 @@ internal sealed class ForegroundAppTracker : IDisposable
     // Set once the tracker thread has a message queue, so Dispose's WM_QUIT can't be posted too early and lost.
     private readonly ManualResetEventSlim _ready = new();
 
+    // Set after the first look at the foreground.
+    private readonly ManualResetEventSlim _described = new();
+
     // Hooks on the current app's process; see WatchApp.
     private IntPtr _minimizeHook;
     private IntPtr _closeHook;
@@ -328,6 +329,9 @@ internal sealed class ForegroundAppTracker : IDisposable
         _onResync = OnResync;
         _thread = new Thread(Run) { IsBackground = true, Name = "Foreground app tracker" };
         _thread.Start();
+
+        // So the band starts on the real app instead of showing 桌面 for a moment; a few milliseconds usually.
+        _described.Wait(300);
     }
 
     private readonly Thread _thread;
@@ -356,6 +360,7 @@ internal sealed class ForegroundAppTracker : IDisposable
         // Right after the Dock (re)starts, the foreground is often the Dock itself; use the app on top instead.
         var foreground = Native.GetForegroundWindow();
         Refresh(Describe(foreground, _names) is null ? TopAppWindow(_names) : foreground);
+        _described.Set();
         var resync = Native.SetTimer(IntPtr.Zero, 0, 1000, _onResync);
 
         while (Native.GetMessage(out var msg, IntPtr.Zero, 0, 0) > 0)
@@ -701,7 +706,7 @@ internal sealed class ForegroundAppTracker : IDisposable
         {
             var name = exe.Equals("explorer.exe", StringComparison.OrdinalIgnoreCase)
                 ? "檔案總管"
-                : Native.PackagedAppName(pid) ?? FileDescription(path) ?? Path.GetFileNameWithoutExtension(path);
+                : Native.PackagedAppName(pid) ?? AppMenuCatalog.For(exe)?.Name ?? FileDescription(path) ?? Path.GetFileNameWithoutExtension(path);
             // Process IDs are short-lived; starting over now and then keeps this small.
             if (names.Count >= 256)
             {
@@ -771,6 +776,9 @@ internal static partial class Native
     public const uint WinEventSkipOwnProcess = 0x0002;
     public const uint WmQuit = 0x0012;
     public const uint WmClose = 0x0010;
+    public const uint WmSysCommand = 0x0112;
+    public const int ScMinimize = 0xF020;
+    public const int ScClose = 0xF060;
     public const int SwMinimize = 6;
 
     private const uint ProcessQueryLimitedInformation = 0x1000;
