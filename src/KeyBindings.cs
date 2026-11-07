@@ -690,10 +690,12 @@ internal static class KeyBindings
     };
 
     // Windows Terminal's names (its KeyChordSerialization), which differ: "plus", "esc", "pgup", "numpad_1".
-    // Matched as written: "F12" or "Esc" isn't a name it knows, and a capital letter stands for the key with Shift.
+    // Names of more than one letter are matched as written: "F12" or "Esc" isn't one it knows. A single letter is that
+    // letter's key in either case ("ctrl+C" is Ctrl+C, with no Shift added).
     private static string? TerminalKey(string key) => key switch
     {
-        { Length: 1 } when char.IsAsciiLetterLower(key[0]) || char.IsAsciiDigit(key[0]) || Sign(key) => key,
+        { Length: 1 } when char.IsAsciiLetter(key[0]) => key.ToLowerInvariant(),
+        { Length: 1 } when char.IsAsciiDigit(key[0]) || Sign(key) => key,
         _ when FunctionKey(key) => key,
         "plus" => "=",
         "minus" => "-",
