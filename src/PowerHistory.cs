@@ -23,7 +23,12 @@ internal sealed class PowerHistory
     // Bucket number (minutes since 1970 / 5) to its average and its highest one-second reading. An average
     // of 0 means too few readings for one (a short stretch on battery), though its peak still counts.
     private readonly Dictionary<long, (float Average, float Peak)> _done = [];
+    // The readings behind a filed bucket, where they're known, so two records of the same five minutes
+    // (one saved before, one taken since) add up instead of one hiding the other.
+    private readonly Dictionary<long, (double Sum, int Count)> _sums = [];
     private readonly string? _file;
+    // The file is there but couldn't be read: it isn't replaced until it has been, and its history added in.
+    private bool _unread;
     private long _bucket = -1;
     private double _sum;
     private int _count;
@@ -37,12 +42,14 @@ internal sealed class PowerHistory
         try
         {
             _file = Path.Combine(ApplicationData.Current.LocalFolder.Path, "power-history.json");
-            Load();
         }
         catch
         {
-            // Not packaged, or the folder can't be read: the history just starts empty and isn't saved.
+            // Not packaged: the history just starts empty and isn't saved.
+            return;
         }
+
+        Load();
     }
 
     private static long BucketOf(DateTime utc) => (long)(utc - DateTime.UnixEpoch).TotalMinutes / BucketMinutes;
@@ -84,17 +91,20 @@ internal sealed class PowerHistory
         if (_bucket >= 0 && _count > 0)
         {
             _done[_bucket] = (_count >= MinSecondsForAverage ? (float)(_sum / _count) : 0f, (float)_peak);
+            _sums[_bucket] = (_sum, _count);
             filed = true;
         }
 
         foreach (var old in _done.Keys.Where(b => b <= next - Buckets).ToList())
         {
             _done.Remove(old);
+            _sums.Remove(old);
         }
 
         // Entering a bucket already filed (the clock was turned back) starts it afresh: its old average
         // would otherwise hide the readings coming in now.
         _done.Remove(next);
+        _sums.Remove(next);
         (_bucket, _sum, _count, _peak) = (next, 0, 0, 0);
         return filed;
     }
@@ -182,53 +192,126 @@ internal sealed class PowerHistory
             "</svg>";
     }
 
+    // At the start, with nothing in yet: the same reading as a file that couldn't be read then, all of it parsed
+    // before anything is added. A file held by something, or broken without a copy kept, is tried again before
+    // the first save, and a half that did parse can't have been added already.
     private void Load()
     {
-        if (_file is null || !File.Exists(_file))
+        _bucket = BucketOf(DateTime.UtcNow);
+        _unread = true;
+        CatchUp();
+    }
+
+    // A filed bucket as saved: [average, peak, seconds], [average, peak] before the seconds were kept, or
+    // the first version's plain number, which is its own peak.
+    private static (float Average, float Peak, int Count) Filed(JsonElement value) =>
+        value.ValueKind == JsonValueKind.Array && value.GetArrayLength() is 2 or 3
+            ? (value[0].GetSingle(), value[1].GetSingle(), value.GetArrayLength() == 3 ? value[2].GetInt32() : 0)
+            : value.ValueKind == JsonValueKind.Number ? (value.GetSingle(), value.GetSingle(), 0) : (0f, 0f, 0);
+
+    // With the lock held: adds readings for a filed bucket to what's already filed for it.
+    private void Merge(long bucket, double sum, int count, float peak)
+    {
+        var (total, seconds) = _sums.TryGetValue(bucket, out var known) ? (known.Sum + sum, known.Count + count) : (sum, count);
+        var top = Math.Max(peak, _done.TryGetValue(bucket, out var filed) ? filed.Peak : 0f);
+        _sums[bucket] = (total, seconds);
+        _done[bucket] = (seconds >= MinSecondsForAverage ? (float)(total / seconds) : 0f, top);
+    }
+
+    // A file that couldn't be read at the start, read now and added to what has come in since. False while
+    // it still can't be read, so that it isn't replaced.
+    private bool CatchUp()
+    {
+        if (!_unread || _file is null)
         {
-            return;
+            return true;
         }
 
-        // Each bucket is [average, peak]; a plain number (the first version's format) is its own peak.
-        // "current" is the bucket under way when it was saved: [bucket, sum, count, peak].
-        var saved = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(File.ReadAllText(_file));
-        var now = BucketOf(DateTime.UtcNow);
-        var oldest = now - Buckets;
-        if (saved?.Remove("current", out var current) == true && current.ValueKind == JsonValueKind.Array && current.GetArrayLength() == 4)
+        try
         {
-            (_bucket, _sum, _count, _peak) = (current[0].GetInt64(), current[1].GetDouble(), current[2].GetInt32(), current[3].GetDouble());
+            var saved = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(File.ReadAllText(_file)) ?? [];
+            var now = BucketOf(DateTime.UtcNow);
 
-            // Restarted within the same five minutes: carry on adding to it. Later: file it as it stood.
-            if (_bucket != now)
+            // All of it read first, nothing added yet: a file that breaks halfway must leave the history as it was,
+            // or the next try would add the first half again.
+            (long Bucket, double Sum, int Count, float Peak)? current = null;
+            if (saved.TryGetValue("current", out var under) && under.ValueKind == JsonValueKind.Array && under.GetArrayLength() == 4)
             {
-                Finish(now);
+                current = (under[0].GetInt64(), under[1].GetDouble(), under[2].GetInt32(), (float)under[3].GetDouble());
+            }
+
+            var filed = new List<(long Bucket, double Sum, int Count, float Peak)>();
+            foreach (var (key, value) in saved)
+            {
+                var (average, top, seconds) = Filed(value);
+                // A filed copy of the bucket that was under way is older than "current", as when read at the start.
+                if (key != "current" && long.TryParse(key, NumberStyles.None, CultureInfo.InvariantCulture, out var bucket)
+                    && bucket > now - Buckets && bucket < now && Math.Max(average, top) > 0 && bucket != current?.Bucket)
+                {
+                    // Saved before the seconds were kept, a shown average stood for at least the minimum.
+                    var known = seconds > 0 ? seconds : average > 0 ? MinSecondsForAverage : 0;
+                    filed.Add((bucket, average * known, known, Math.Max(average, top)));
+                }
+            }
+
+            lock (_lock)
+            {
+                foreach (var (bucket, sum, count, peak) in filed)
+                {
+                    Merge(bucket, sum, count, peak);
+                }
+
+                // The bucket that was under way then: added to this one if it's the same, filed if older.
+                if (current is var (at, sum2, count2, peak2))
+                {
+                    if (at == _bucket)
+                    {
+                        (_sum, _count, _peak) = (_sum + sum2, _count + count2, Math.Max(_peak, peak2));
+                    }
+                    else if (at > now - Buckets && at < now && count2 > 0)
+                    {
+                        Merge(at, sum2, count2, peak2);
+                    }
+                }
+            }
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // Gone since: nothing to add, and nothing left to protect.
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch
+        {
+            if (!KeepBroken())
+            {
+                return false;
             }
         }
 
-        foreach (var (key, value) in saved ?? [])
-        {
-            var (average, peak) = value.ValueKind == JsonValueKind.Array && value.GetArrayLength() == 2
-                ? (value[0].GetSingle(), value[1].GetSingle())
-                : value.ValueKind == JsonValueKind.Number ? (value.GetSingle(), value.GetSingle()) : (0f, 0f);
-            if (long.TryParse(key, NumberStyles.None, CultureInfo.InvariantCulture, out var bucket) && bucket > oldest && bucket <= now
-                && Math.Max(average, peak) > 0)
-            {
-                // The bucket restored from "current" (filed above) is newer than a filed copy of it.
-                _done.TryAdd(bucket, (average, Math.Max(average, peak)));
-            }
-        }
+        _unread = false;
+        return true;
+    }
 
-        // The bucket under way (restored above) is the live one: a filed copy of it, saved before the clock
-        // was turned back, mustn't hide the readings coming in now.
-        if (_bucket == now)
+    // False if no copy could be kept, and then the file mustn't be replaced.
+    private bool KeepBroken()
+    {
+        try
         {
-            _done.Remove(now);
+            File.Copy(_file!, _file + ".bak", overwrite: true);
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 
     private void Save()
     {
-        if (_file is null)
+        if (_file is null || !CatchUp())
         {
             return;
         }
@@ -238,7 +321,11 @@ internal sealed class PowerHistory
             string json;
             lock (_lock)
             {
-                var data = _done.ToDictionary(p => p.Key.ToString(CultureInfo.InvariantCulture), p => (object)new[] { p.Value.Average, p.Value.Peak });
+                var data = _done.ToDictionary(
+                    p => p.Key.ToString(CultureInfo.InvariantCulture),
+                    p => _sums.TryGetValue(p.Key, out var known)
+                        ? (object)new object[] { p.Value.Average, p.Value.Peak, known.Count }
+                        : new[] { p.Value.Average, p.Value.Peak });
                 if (_count > 0)
                 {
                     data["current"] = new object[] { _bucket, _sum, _count, _peak };

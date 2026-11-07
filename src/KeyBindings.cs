@@ -24,11 +24,21 @@ internal static class KeyBindings
     /// <param name="Conditional">Only in some situations (a VS Code "when" clause): not relied on as a replacement.</param>
     internal sealed record Binding(string Keys, string? Command, string? Removes = null, bool Conditional = false);
 
+    private const string Unreadable = "<unreadable>";
+    private const string Unsure = "<unsure>";
+
     private static readonly Lock Gate = new();
     private static readonly Dictionary<string, (DateTime Written, List<Binding> Bindings)> Cache = [];
 
     internal static Keys? Resolve(List<Binding> bindings, string command, string? defaultKeys)
     {
+        // The file couldn't be read, or not all of it with certainty: any key may have been given to something
+        // else, so none is pressed rather than the wrong one (Ctrl+S closing the editor, say).
+        if (bindings.Any(b => b.Keys is Unreadable or Unsure))
+        {
+            return null;
+        }
+
         // A Terminal id the user redefined runs something else now, whatever its keys.
         if (bindings.Any(b => b.Keys == $"<redefined:{command}>"))
         {
@@ -134,20 +144,51 @@ internal static class KeyBindings
         }
         catch
         {
-            // Unreadable (being saved, say): the default keys stand.
-            return [];
+            // Unreadable (being saved, say): not the same as no changes, and not cached, so it's read again.
+            return [new Binding(Unreadable, null)];
         }
     }
 
     // The text of each { ... } directly inside the file's outer [ ... ], skipping strings and comments, so
     // one mistake (a null, a stray comma, a missing closing bracket) doesn't hide the rules around it.
-    private static IEnumerable<string> TopLevelObjects(string json)
+    // `unfinished` says the last one was never closed, or its brackets don't pair up, which leaves its keys
+    // uncertain.
+    private static List<string> TopLevelObjects(string json, out bool unfinished)
     {
+        var found = new List<string>();
+        unfinished = false;
         var open = new Stack<char>(); // The brackets around the current position, innermost on top.
         var start = -1;
+        var rooted = false; // The root array has been opened.
         for (var i = 0; i < json.Length; i++)
         {
             var c = json[i];
+            var comment = c == '/' && i + 1 < json.Length && json[i + 1] is '/' or '*';
+            if (open.Count == 0 && !comment && !char.IsWhiteSpace(c) && c != '\uFEFF')
+            {
+                // Nothing after the root array counts, a second array pasted in included, as in VS Code.
+                if (rooted)
+                {
+                    break;
+                }
+
+                // An object for the root is read as one, and isn't a list of rules: VS Code uses none of it.
+                if (c == '{')
+                {
+                    return found;
+                }
+
+                // Something else before it (a stray character, a null): VS Code may still find the rules after it,
+                // so what they are can't be told from here, and none of the keys is trusted.
+                if (c != '[')
+                {
+                    unfinished = true;
+                    return found;
+                }
+
+                rooted = true;
+            }
+
             if (c == '"')
             {
                 for (i++; i < json.Length && json[i] != '"'; i++)
@@ -156,11 +197,26 @@ internal static class KeyBindings
                     {
                         i++;
                     }
+
+                    // A string can't run onto the next line: VS Code ends it there as a mistake and reads on, so the
+                    // rules after it count there and can't be told apart from here. Nothing is trusted then.
+                    if (i < json.Length && json[i] is '\n' or '\r')
+                    {
+                        unfinished = true;
+                        return found;
+                    }
+                }
+
+                // Never closed at all.
+                if (i >= json.Length)
+                {
+                    unfinished = true;
+                    return found;
                 }
             }
             else if (c == '/' && i + 1 < json.Length && json[i + 1] == '/')
             {
-                while (i < json.Length && json[i] != '\n')
+                while (i < json.Length && !IsLineBreak(json[i]))
                 {
                     i++;
                 }
@@ -172,12 +228,6 @@ internal static class KeyBindings
             }
             else if (c is '[' or '{')
             {
-                // The file's root must be an array, as VS Code requires; anything else holds no rules.
-                if (open.Count == 0 && c != '[')
-                {
-                    yield break;
-                }
-
                 if (c == '{' && open.Count == 1)
                 {
                     start = i;
@@ -185,16 +235,27 @@ internal static class KeyBindings
 
                 open.Push(c);
             }
-            else if ((c is ']' or '}') && open.Count > 0)
+            else if (c is ']' or '}')
             {
-                open.Pop();
+                // A bracket that closes the wrong kind (a "]]" typed for "}]"): what VS Code recovers from it can't
+                // be told from here, so the rule under way is left uncertain.
+                if (open.Pop() != (c == ']' ? '[' : '{'))
+                {
+                    unfinished = true;
+                    return found;
+                }
+
+                // The root array is closed: like VS Code, nothing after it counts (checked at the top of the loop).
                 if (c == '}' && open.Count == 1 && start >= 0)
                 {
-                    yield return json[start..(i + 1)];
+                    found.Add(json[start..(i + 1)]);
                     start = -1;
                 }
             }
         }
+
+        unfinished = start >= 0;
+        return found;
     }
 
     // VS Code's User folder: in the data folder beside a portable copy, otherwise in Roaming AppData.
@@ -232,14 +293,25 @@ internal static class KeyBindings
     internal static List<Binding> ReadVsCode(string json)
     {
         var bindings = new List<Binding>();
-        foreach (var text in TopLevelObjects(json))
+        var objects = TopLevelObjects(json, out var unfinished);
+        var unsure = unfinished;
+        foreach (var text in objects)
         {
-            if (Rule(text) is not var (key, command, when) || command is null)
+            var rule = Rule(text, out var guessed);
+            unsure |= guessed;
+            if (rule is not var (key, command, when) || command is null)
             {
                 continue; // No usable command: VS Code skips the rule too.
             }
 
-            var keys = key is null ? null : Normalize(key);
+            // In VS Code's own names first: one it doesn't take, or one whose key can't be told from here
+            // ("ctrl+[KeyS]" moves with the layout), may stand for any key, so none is trusted.
+            var keys = key is null ? null : InAppNotation(key, VsCode) is { } named ? Normalize(named) : null;
+            if (key is not null && keys is null)
+            {
+                unsure = true;
+                continue;
+            }
             if (command.StartsWith('-'))
             {
                 var removed = command[1..];
@@ -251,14 +323,22 @@ internal static class KeyBindings
             }
         }
 
+        // A rule read only by picking fields out of broken JSON, or one left unclosed, may not be what VS Code
+        // makes of it: a "command" inside "args" passes for the rule's own, for one. Then nothing is trusted.
+        if (unsure)
+        {
+            bindings.Add(new Binding(Unsure, null));
+        }
+
         return bindings;
     }
 
     // A rule's key, command and when. Strict JSON first; if the rule has a slip VS Code tolerates (a missing
     // comma, say), the three string fields are read directly. A field that isn't a string counts as absent,
     // and a rule whose key or command isn't a string is skipped (null), as VS Code's filter does.
-    private static (string? Key, string? Command, string? When)? Rule(string text)
+    private static (string? Key, string? Command, string? When)? Rule(string text, out bool guessed)
     {
+        guessed = false;
         try
         {
             using var document = JsonDocument.Parse(text, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
@@ -282,6 +362,7 @@ internal static class KeyBindings
         }
         catch (JsonException)
         {
+            guessed = true;
             // Comments are taken out first: a commented-out "command" mustn't be read as the rule's own.
             var code = WithoutComments(text);
             string? Field(string name) =>
@@ -289,6 +370,10 @@ internal static class KeyBindings
             return (Field("key"), Field("command"), Field("when"));
         }
     }
+
+    // What VS Code's JSON reader takes as the end of a line, and so of a // comment: a file saved with CR
+    // alone still has its next line read.
+    private static bool IsLineBreak(char c) => c is '\n' or '\r' or '\u2028' or '\u2029';
 
     // The text with // and /* */ comments blanked out, strings left as they are.
     private static string WithoutComments(string text)
@@ -312,7 +397,7 @@ internal static class KeyBindings
             }
             else if (c == '/' && i + 1 < text.Length && text[i + 1] == '/')
             {
-                while (i < text.Length && text[i] != '\n')
+                while (i < text.Length && !IsLineBreak(text[i]))
                 {
                     i++;
                 }
@@ -400,11 +485,25 @@ internal static class KeyBindings
                 continue;
             }
 
-            IEnumerable<string?> all = keys.ValueKind == JsonValueKind.Array ? keys.EnumerateArray().Select(k => k.GetString()) : [keys.GetString()];
-            foreach (var key in all.OfType<string>())
+            // Terminal takes "keys" as one string, or a list of exactly one; anything else it may ignore.
+            var key = keys.ValueKind == JsonValueKind.String ? keys.GetString()
+                : keys.ValueKind == JsonValueKind.Array && keys.GetArrayLength() == 1 && keys[0].ValueKind == JsonValueKind.String ? keys[0].GetString()
+                : null;
+            if (keys.ValueKind == JsonValueKind.Null)
             {
-                bindings.Add(target is null ? new Binding(Normalize(key), null, "*") : new Binding(Normalize(key), target));
+                continue; // No keys at all: nothing is put on any.
             }
+
+            // Only what Terminal itself takes ("[F12]" is VS Code's, "ctrl-f12" isn't its separator): another may be
+            // ignored there, or not.
+            if (key is null || InAppNotation(key, Terminal) is not { } named)
+            {
+                bindings.Add(new Binding(Unsure, null));
+                continue;
+            }
+
+            var normalized = Normalize(named);
+            bindings.Add(target is null ? new Binding(normalized, null, "*") : new Binding(normalized, target));
         }
 
         return bindings;
@@ -486,6 +585,129 @@ internal static class KeyBindings
         "numpad_minus" or "numpad_subtract" => "numpad_minus",
         ['n', 'u', 'm', 'p', 'a', 'd', .. var rest] when rest.TrimStart('_') is { Length: 1 } d && char.IsAsciiDigit(d[0]) => $"numpad_{d}",
         _ => key,
+    };
+
+    // VS Code's "[KeyS]", "[F12]": the key at a place on the keyboard rather than the one with that name. Where
+    // that's the same key whatever the layout, it's the named one ("ctrl+[F12]" is "ctrl+f12"). Letters, digits
+    // and signs move with the layout, so which named key they are isn't known: left in brackets (see Physical).
+    private static string PhysicalKey(string code) => code switch
+    {
+        _ when FunctionKey(code) => code,
+        "escape" or "enter" or "tab" or "space" or "backspace" or "delete" or "insert" or "home" or "end" or "pageup" or "pagedown" => code,
+        "arrowleft" => "left",
+        "arrowup" => "up",
+        "arrowright" => "right",
+        "arrowdown" => "down",
+        "numpadadd" => "numpad_plus",
+        "numpadsubtract" => "numpad_minus",
+        ['n', 'u', 'm', 'p', 'a', 'd', var d] when char.IsAsciiDigit(d) => $"numpad_{d}",
+        _ => $"[{code}]",
+    };
+
+    // How an app's settings write keys: the modifiers it takes and what may follow each, whether one setting may be a
+    // sequence ("ctrl+k ctrl+s"), its key names, and whether those are matched as written ("F12" isn't "f12") or in
+    // any case. Modifiers are taken in any case by both.
+    private sealed record Notation(Regex Modifiers, bool Sequences, Func<string, string?> Key, bool KeysAsWritten);
+
+    // VS Code's keybindingParser: ctrl, shift, alt, meta, win or cmd, then "+" or "-"; sequences parted by spaces. It
+    // reads the whole setting in lower case.
+    private static readonly Notation VsCode = new(
+        new("^(ctrl|shift|alt|meta|win|cmd)[+-]", RegexOptions.Compiled | RegexOptions.IgnoreCase), true, VsCodeKey, false);
+
+    // Windows Terminal's KeyChordSerialization: ctrl, alt, shift or win, only ever then "+"; one chord, no sequences.
+    // Its key names are looked up as written, in lower case.
+    private static readonly Notation Terminal = new(
+        new(@"^(ctrl|alt|shift|win)\+", RegexOptions.Compiled | RegexOptions.IgnoreCase), false, TerminalKey, true);
+
+    // Keys as an app's settings write them, in the names used here, ready for Normalize. Null unless all of it is
+    // written the way that app takes it: a modifier it doesn't know ("control+f12"), a separator it doesn't use
+    // (Terminal's "ctrl-f12"), a sequence where it takes none, or a key name it doesn't know. Such a setting may be
+    // ignored there, so it can't be read as these keys or as none.
+    private static string? InAppNotation(string keys, Notation notation)
+    {
+        var chords = keys.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (chords.Length == 0 || (chords.Length > 1 && !notation.Sequences) || (!notation.Sequences && keys != keys.Trim()))
+        {
+            return null;
+        }
+
+        var read = new List<string>();
+        foreach (var chord in chords)
+        {
+            var modifiers = string.Empty;
+            var rest = chord;
+            while (notation.Modifiers.Match(rest) is { Success: true } m && m.Length < rest.Length)
+            {
+                modifiers += m.Value.ToLowerInvariant();
+                rest = rest[m.Length..];
+            }
+
+            if (notation.Key(notation.KeysAsWritten ? rest : rest.ToLowerInvariant()) is not { } key)
+            {
+                return null;
+            }
+
+            read.Add(modifiers + key);
+        }
+
+        return string.Join(' ', read);
+    }
+
+    private static bool Sign(string key) => key is "=" or "-" or "," or "." or "/" or ";" or "'" or "`" or "[" or "]" or "\\";
+
+    // "f1" to "f24" exactly: not "f01" or "f+1", which no app reads as F1.
+    private static bool FunctionKey(string key) =>
+        key is ['f', '1' or '2' or '3' or '4' or '5' or '6' or '7' or '8' or '9', .. var more]
+        && more.Length <= 1 && more.All(char.IsAsciiDigit) && int.Parse(key[1..], System.Globalization.CultureInfo.InvariantCulture) <= 24;
+
+    // VS Code's names (its keyCodes.ts), including the Windows names for the signs ("ctrl+oem_plus" is "ctrl+=") and
+    // keys at a place on the keyboard ("[F12]"). Keys this never presses and nothing else stands for are kept as they
+    // are; anything else is null.
+    private static string? VsCodeKey(string key) => key switch
+    {
+        { Length: 1 } when char.IsAsciiLetterOrDigit(key[0]) || Sign(key) => key,
+        _ when FunctionKey(key) => key,
+        "left" or "up" or "right" or "down" or "enter" or "tab" or "escape" or "space" or "backspace" or "delete"
+            or "insert" or "home" or "end" or "pageup" or "pagedown" => key,
+        "oem_1" => ";",
+        "oem_plus" => "=",
+        "oem_comma" => ",",
+        "oem_minus" => "-",
+        "oem_period" => ".",
+        "oem_2" => "/",
+        "oem_3" => "`",
+        "oem_4" => "[",
+        "oem_5" => "\\",
+        "oem_6" => "]",
+        "oem_7" => "'",
+        ['n', 'u', 'm', 'p', 'a', 'd', var d] when char.IsAsciiDigit(d) => $"numpad_{d}",
+        "numpad_add" => "numpad_plus",
+        "numpad_subtract" => "numpad_minus",
+        "numpad_multiply" or "numpad_divide" or "numpad_decimal" or "numpad_separator" or "capslock" or "pausebreak"
+            or "contextmenu" or "numlock" or "scrolllock" => key,
+        ['[', .. var code, ']'] when code.Length > 0 && PhysicalKey(code) is var named && named[0] != '[' => named,
+        _ => null,
+    };
+
+    // Windows Terminal's names (its KeyChordSerialization), which differ: "plus", "esc", "pgup", "numpad_1".
+    // Matched as written: "F12" or "Esc" isn't a name it knows, and a capital letter stands for the key with Shift.
+    private static string? TerminalKey(string key) => key switch
+    {
+        { Length: 1 } when char.IsAsciiLetterLower(key[0]) || char.IsAsciiDigit(key[0]) || Sign(key) => key,
+        _ when FunctionKey(key) => key,
+        "plus" => "=",
+        "minus" => "-",
+        "left" or "up" or "right" or "down" or "enter" or "tab" or "space" or "backspace" or "delete" or "insert"
+            or "home" or "end" => key,
+        "esc" or "escape" => "escape",
+        "pgup" or "pageup" => "pageup",
+        "pgdn" or "pagedown" => "pagedown",
+        ['n', 'u', 'm', 'p', 'a', 'd', var d] when char.IsAsciiDigit(d) => $"numpad_{d}",
+        ['n', 'u', 'm', 'p', 'a', 'd', '_', var d] when char.IsAsciiDigit(d) => $"numpad_{d}",
+        "numpad_plus" or "numpad_add" => "numpad_plus",
+        "numpad_minus" or "numpad_subtract" => "numpad_minus",
+        "numpad_multiply" or "numpad_divide" or "numpad_period" or "numpad_decimal" or "app" or "menu" => key,
+        _ => null,
     };
 
     // Keys in either app's notation, as the virtual keys to press and the way the menu shows them.
