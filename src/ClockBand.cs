@@ -107,7 +107,7 @@ internal sealed partial class ClockPage : LiveCardPage
     private static readonly string[] Digits = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
 
     private string _region = Region();
-    private int _lastMinute = -1;
+    private long _regionReadAt = long.MinValue; // Environment.TickCount64 when the region was last read.
     private DateTime _day;
     private string _date = string.Empty;
     private string _lunar = string.Empty;
@@ -130,15 +130,18 @@ internal sealed partial class ClockPage : LiveCardPage
         Update(DateTime.Now);
     }
 
-    // Made every second, open or not, so the page opens on the current time.
-    public void Update(DateTime now) => Show(Json(now));
+    // Given every second; made into the page's data when the page opens or a card can take it.
+    public void Update(DateTime now) => Show(() => Json(now));
 
     private string Json(DateTime now)
     {
-        // The region is read once a minute too, so a change in Windows' settings shows up.
-        if (now.Minute != _lastMinute)
+        // The region is read again when the last reading is a minute old, so a change in Windows' settings shows up.
+        // By the time passed, not the minute on the clock: the data is only made while the page is up, and an hour
+        // later the minute can be the same.
+        var tick = Environment.TickCount64;
+        if (_regionReadAt == long.MinValue || tick - _regionReadAt >= 60_000)
         {
-            _lastMinute = now.Minute;
+            _regionReadAt = tick;
             _region = Region();
         }
 

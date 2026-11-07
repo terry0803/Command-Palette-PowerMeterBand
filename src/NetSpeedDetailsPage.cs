@@ -83,7 +83,9 @@ internal sealed partial class NetSpeedDetailsPage : LiveCardPage
         Update(new NetSpeedSnapshot(null, null, null)); // Replaced by the band's first reading right away.
     }
 
-    public void Update(NetSpeedSnapshot s)
+    public void Update(NetSpeedSnapshot s) => Show(() => Json(s));
+
+    private static string Json(NetSpeedSnapshot s)
     {
         var data = new JsonObject
         {
@@ -98,6 +100,6 @@ internal sealed partial class NetSpeedDetailsPage : LiveCardPage
             ["direction"] = NetSpeedSettings.Describe(NetSpeedSettings.Direction),
         };
 
-        Show(data.ToJsonString());
+        return data.ToJsonString();
     }
 }

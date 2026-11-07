@@ -16,38 +16,47 @@ internal abstract partial class LiveCardPage(string template) : ContentPage
     // Guards the fields only. A card is never written with it held: writing calls into the Dock.
     private readonly Lock _lock = new();
     private FormContent? _card;
-    private string _data = "{}";
+    private Func<string> _data = () => "{}";
     private string? _shown;
 
     public override IContent[] GetContent()
     {
         lock (_lock)
         {
-            _card = new FormContent { TemplateJson = template, DataJson = _data };
-            _shown = _data;
+            var data = _data();
+            _card = new FormContent { TemplateJson = template, DataJson = data };
+            _shown = data;
             return [_card];
         }
     }
 
-    // The data to show, kept for the next opening when the page isn't up.
-    protected void Show(string data)
+    // How to make the data to show from the latest readings. It's only made when a card can take it, or when the
+    // page opens: the rest of the time (nearly always) nothing would show it, and a page's data, chart and all, is
+    // tens of kilobytes a second to build and throw away.
+    protected void Show(Func<string> data)
     {
         FormContent card;
+        string made;
         lock (_lock)
         {
             _data = data;
+            if (_card is null || !CommandPalette.HasForeground())
+            {
+                return;
+            }
 
             // Unchanged data is skipped so the Dock doesn't redraw the card for nothing.
-            if (_card is null || data == _shown || !CommandPalette.HasForeground())
+            made = data();
+            if (made == _shown)
             {
                 return;
             }
 
             card = _card;
-            _shown = data;
+            _shown = made;
         }
 
-        card.DataJson = data;
+        card.DataJson = made;
     }
 }
 

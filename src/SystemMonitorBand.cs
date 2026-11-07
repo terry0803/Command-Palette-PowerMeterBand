@@ -181,9 +181,8 @@ internal sealed partial class SystemMonitorPage : LiveCardPage
         Task.Run(() => _hardware = HardwareInfo.Read());
     }
 
-    // Made every second even while the page is closed, so it opens on current numbers. (Measured: making it
-    // only while open saved nothing measurable, 8.9 ms of CPU a second either way.)
-    public void Update(SystemSnapshot s) => Show(Json(s));
+    // Made from the latest readings when the page opens or a card can take it, not every second regardless.
+    public void Update(SystemSnapshot s) => Show(() => Json(s));
 
     private string Json(SystemSnapshot s)
     {

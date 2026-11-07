@@ -16,11 +16,14 @@ internal sealed record NetSpeedSnapshot(
 /// as the built-in Performance Monitor: the interface table's byte counters, skipping virtual,
 /// filter and endpoint interfaces (VPNs, Hyper-V switches, Wi-Fi Direct, ...).
 /// </summary>
-internal sealed class NetSpeedSampler
+internal sealed class NetSpeedSampler : IDisposable
 {
     private readonly Dictionary<ulong, (ulong Received, ulong Sent)> _previous = [];
     private readonly InterfaceTable _table = new();
     private long? _lastTimestamp;
+
+    // Not to be read after this.
+    public void Dispose() => _table.Dispose();
 
     public NetSpeedSnapshot Read()
     {
@@ -77,7 +80,7 @@ internal sealed class NetSpeedSampler
     /// lists dozens of interfaces and only a few count, so it's read every 10 seconds, or as soon as one of
     /// them fails or none is connected; in between just the ones that count are read.
     /// </summary>
-    private sealed class InterfaceTable
+    private sealed class InterfaceTable : IDisposable
     {
         private const long FullReadMs = 10_000;
         private const int RowSize = 1352;
@@ -106,10 +109,19 @@ internal sealed class NetSpeedSampler
         [DllImport("iphlpapi.dll")]
         private static extern uint GetIfEntry2(IntPtr row);
 
-        // Lives as long as the extension, like the sampler that owns it.
-        private readonly IntPtr _row = Marshal.AllocHGlobal(RowSize);
+        // One row's worth, reused for every reading, until the band that owns the sampler is removed.
+        private IntPtr _row = Marshal.AllocHGlobal(RowSize);
         private List<ulong> _physical = [];
         private long _fullReadAt;
+
+        public void Dispose()
+        {
+            if (_row != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(_row);
+                _row = IntPtr.Zero;
+            }
+        }
 
         public List<InterfaceRow> ReadPhysical()
         {
@@ -127,6 +139,7 @@ internal sealed class NetSpeedSampler
         // Null if one is gone.
         private List<InterfaceRow>? ReadKnown()
         {
+            ObjectDisposedException.ThrowIf(_row == IntPtr.Zero, this);
             var rows = new List<InterfaceRow>(_physical.Count);
             foreach (var luid in _physical)
             {

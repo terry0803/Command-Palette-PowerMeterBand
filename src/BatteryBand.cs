@@ -312,7 +312,9 @@ internal sealed partial class BatteryPage : LiveCardPage
             ? PowerDetailsPage.EstimateTime(s.RemainingMilliwattHours, s.FullChargeMilliwattHours, s.RateMilliwatts)
             : ("預估剩餘時間", "--");
 
-    public void Update(BatteryReading s)
+    public void Update(BatteryReading s) => Show(() => Json(s));
+
+    private static string Json(BatteryReading s)
     {
         var (timeLabel, time) = Time(s);
         var data = new JsonObject
@@ -336,6 +338,6 @@ internal sealed partial class BatteryPage : LiveCardPage
                 : "--",
         };
 
-        Show(data.ToJsonString());
+        return data.ToJsonString();
     }
 }

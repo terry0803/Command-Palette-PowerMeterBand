@@ -78,8 +78,16 @@ internal sealed partial class NetSpeedDockBand : WrappedDockItem, IDisposable
     {
         lock (_lock)
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             _disposed = true;
             DockTicker.Unsubscribe(Update);
+
+            // Under the lock, so a reading under way finishes first; none starts after (see Update).
+            _sampler.Dispose();
         }
     }
 }

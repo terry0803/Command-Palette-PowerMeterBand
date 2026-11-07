@@ -141,9 +141,15 @@ internal sealed partial class PowerDetailsPage : LiveCardPage
         Update(new PowerSnapshot(null, null, null, null, null, null, null, false));
     }
 
+    // The history takes every reading; the page's data is only made when something will show it.
     public void Update(PowerSnapshot s)
     {
         _history.Add(s.SystemWatts);
+        Show(() => Json(s));
+    }
+
+    private string Json(PowerSnapshot s)
+    {
         var (chart, top, average, peak) = _history.Describe();
         var data = new JsonObject
         {
@@ -181,7 +187,7 @@ internal sealed partial class PowerDetailsPage : LiveCardPage
         var (label, time) = EstimateTime(s.RemainingMilliwattHours, s.FullChargeMilliwattHours, s.BatteryRateMilliwatts);
         data["timeLabel"] = label;
         data["timeRemaining"] = time;
-        Show(data.ToJsonString());
+        return data.ToJsonString();
     }
 
     private static string FormatWatts(double? watts) => watts is double w ? $"{w:0.0} W" : "--";
