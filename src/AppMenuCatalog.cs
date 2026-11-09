@@ -10,13 +10,16 @@ namespace PowerMeterBand;
 /// <param name="FileMenu">Replaces the shared 檔案 menu where its shortcuts mean something else in this app.</param>
 /// <param name="EditMenu">Replaces the shared 編輯 menu likewise (a terminal's Ctrl+C interrupts, for one).</param>
 /// <param name="Name">The app's name where its file description isn't one (PuTTY's lists what it connects with).</param>
+/// <param name="ScanCodes">Keys sent to it carry the key's scan code, as a keyboard's do, for apps that match the
+/// physical key (a web page's KeyboardEvent.code) and so ignore keys sent without one.</param>
 internal sealed record AppMenuSet(
     string Id,
     string[] Exes,
     (string Title, MenuEntry[] Entries)[] Menus,
     MenuEntry[]? FileMenu = null,
     MenuEntry[]? EditMenu = null,
-    string? Name = null);
+    string? Name = null,
+    bool ScanCodes = false);
 
 /// <summary>
 /// App-specific menus for popular apps, built only from each app's documented shortcuts,
@@ -669,6 +672,36 @@ internal static class AppMenuCatalog
             Key("開啟 Codex 資料夾⋯", "Ctrl+O", 0xE8B7, Ctrl, 'O'),
             CloseWindow(),
         ]),
+
+        // Perplexity: its own shortcuts (Settings > Shortcuts, read from the installed app; they match the physical
+        // key, hence ScanCodes) and those of its Electron menu (reload, zoom, full screen). Its Ctrl+punctuation ones
+        // (sidebar Ctrl+., incognito Ctrl+;, back/forward Ctrl+[ ], settings Ctrl+,) are left out: with a Chinese
+        // input method on, the punctuation also lands in the prompt (。；【), from a real keyboard too.
+        new("perplexity", ["perplexity.exe"],
+        [
+            ("會話",
+            [
+                Key("搜尋對話⋯", "Ctrl+E", 0xE721, Ctrl, 'E'),
+                Key("上一個對話", "Ctrl+↑", 0xE74A, Ctrl, Up),
+                Key("下一個對話", "Ctrl+↓", 0xE74B, Ctrl, Down),
+                Key("搜尋模式", "Ctrl+1", 0xE721, Ctrl, '1'),
+                Key("Computer 模式", "Ctrl+2", 0xE7F4, Ctrl, '2'),
+            ]),
+            ("檢視",
+            [
+                Key("重新載入", "Ctrl+R", 0xE72C, Ctrl, 'R'),
+                Key("放大", "Ctrl+=", 0xE8A3, Ctrl, Plus),
+                Key("縮小", "Ctrl+-", 0xE71F, Ctrl, Minus),
+                Key("實際大小", "Ctrl+0", 0xE71E, Ctrl, '0'),
+                Key("全螢幕", "F11", 0xE740, F11),
+            ]),
+        ],
+        FileMenu:
+        [
+            Key("新對話", "Ctrl+N", 0xE710, Ctrl, 'N'),
+            CloseWindow(),
+        ],
+        ScanCodes: true),
 
         // Snipping Tool: Ctrl+N starts a capture straight away, and only undo, redo and copy are bound.
         new("snippingtool", ["snippingtool.exe"],

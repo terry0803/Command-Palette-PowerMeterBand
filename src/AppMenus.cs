@@ -219,6 +219,9 @@ internal static class Keys
             return;
         }
 
+        // Looked up first, so the last focus check stays right before the keys go out.
+        var scanCodes = AppMenuCatalog.For(AppWindows.ExeName(app))?.ScanCodes == true;
+
         if (!HasForeground(app))
         {
             // Bring back only the app's own window, not whatever got its handle after it closed.
@@ -264,7 +267,7 @@ internal static class Keys
                     }
                 }
 
-                Press(chords[i]);
+                Press(chords[i], scanCodes);
             }
         }
     }
@@ -335,21 +338,23 @@ internal static class Keys
             || (foreground == app.Window && Native.ChildProcessOf(foreground, pid) == app.ProcessId);
     }
 
-    public static void Tap(ushort key) => Press([key]);
+    public static void Tap(ushort key) => Press([key], false);
 
     // Arrows, Windows and media keys only behave as themselves when sent as extended keys.
     private static bool IsExtended(ushort key) =>
         key is LeftWindows or (>= 0x21 and <= 0x28) or 0x2D or 0x2E or (>= 0xA6 and <= 0xB7);
 
-    // Presses the keys in order and releases them in reverse, like a person would.
-    private static void Press(ushort[] chord)
+    // Presses the keys in order and releases them in reverse, like a person would. With scanCodes each key also
+    // carries its scan code, as a keyboard's does: without one a web page's KeyboardEvent.code is empty.
+    private static void Press(ushort[] chord, bool scanCodes)
     {
         var inputs = new Input[chord.Length * 2];
         for (var i = 0; i < chord.Length; i++)
         {
             var flags = IsExtended(chord[i]) ? KeyEventExtendedKey : 0;
-            inputs[i] = new Input { Type = InputKeyboard, VirtualKey = chord[i], Flags = flags };
-            inputs[inputs.Length - 1 - i] = new Input { Type = InputKeyboard, VirtualKey = chord[i], Flags = flags | KeyEventKeyUp };
+            var scan = scanCodes ? (ushort)MapVirtualKey(chord[i], MapVirtualKeyToScanCode) : (ushort)0;
+            inputs[i] = new Input { Type = InputKeyboard, VirtualKey = chord[i], ScanCode = scan, Flags = flags };
+            inputs[inputs.Length - 1 - i] = new Input { Type = InputKeyboard, VirtualKey = chord[i], ScanCode = scan, Flags = flags | KeyEventKeyUp };
         }
 
         SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
@@ -357,6 +362,11 @@ internal static class Keys
 
     [DllImport("user32.dll")]
     private static extern uint SendInput(uint count, Input[] inputs, int size);
+
+    private const uint MapVirtualKeyToScanCode = 0; // MAPVK_VK_TO_VSC
+
+    [DllImport("user32.dll")]
+    private static extern uint MapVirtualKey(uint code, uint mapType);
 
     // INPUT with its KEYBDINPUT member, laid out for 64-bit Windows.
     [StructLayout(LayoutKind.Explicit, Size = 40)]
