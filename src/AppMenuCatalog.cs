@@ -703,6 +703,44 @@ internal static class AppMenuCatalog
         ],
         ScanCodes: true),
 
+        // Antigravity (the standalone agent app): its default shortcuts, read from the installed app's keybinding
+        // table for the desktop (Electron) build, plus Ctrl+Shift+N from its main process. Like Perplexity it is a
+        // web page that partly matches the physical key, hence ScanCodes. Ctrl+punctuation shortcuts (settings,
+        // model picker, back/forward, project and environment pickers) are left out: with a Chinese input method on,
+        // the punctuation can also land in the prompt. Code Search (Ctrl+Shift+F) did nothing here, from a real
+        // keyboard too, so it's left out as well.
+        new("antigravity", ["antigravity.exe"],
+        [
+            ("會話",
+            [
+                Key("對話選擇器⋯", "Ctrl+K", 0xE721, Ctrl, 'K'),
+                Key("上一個對話", "Alt+↑", 0xE74A, Alt, Up),
+                Key("下一個對話", "Alt+↓", 0xE74B, Alt, Down),
+                Key("專案選擇器⋯", "Ctrl+Shift+K", 0xE8B7, Ctrl, Shift, 'K'),
+            ]),
+            ("檢視",
+            [
+                Key("顯示或隱藏側邊欄", "Ctrl+B", 0xE8A0, Ctrl, 'B'),
+                Key("顯示或隱藏側邊面板", "Ctrl+Shift+B", 0xE8A0, Ctrl, Shift, 'B'),
+                Key("顯示或隱藏終端機", "Ctrl+J", 0xE756, Ctrl, 'J'),
+                Key("放大", "Ctrl+=", 0xE8A3, Ctrl, Plus),
+                Key("縮小", "Ctrl+-", 0xE71F, Ctrl, Minus),
+                Key("實際大小", "Ctrl+0", 0xE71E, Ctrl, '0'),
+            ]),
+            ("搜尋",
+            [
+                Key("搜尋檔案⋯", "Ctrl+P", 0xE8A5, Ctrl, 'P'),
+                Key("命令選擇區⋯", "Ctrl+Shift+P", 0xE756, Ctrl, Shift, 'P'),
+            ]),
+        ],
+        FileMenu:
+        [
+            Key("新對話", "Ctrl+N", 0xE710, Ctrl, 'N'),
+            Key("新視窗", "Ctrl+Shift+N", 0xE8A7, Ctrl, Shift, 'N'),
+            CloseWindow(),
+        ],
+        ScanCodes: true),
+
         // Snipping Tool: Ctrl+N starts a capture straight away, and only undo, redo and copy are bound.
         new("snippingtool", ["snippingtool.exe"],
         [
